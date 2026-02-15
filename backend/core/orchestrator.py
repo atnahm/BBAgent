@@ -59,17 +59,17 @@ class Orchestrator:
         
     def _parse_date(self, date_str: Optional[str]) -> datetime:
         """Parse date string with multiple fallback formats."""
-        if not date_str:
+        if not date_str or date_str == 'null' or date_str == 'NULL':
             return None
             
         for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%Y/%m/%d'):
             try:
                 return datetime.strptime(date_str, fmt)
-            except ValueError:
+            except (ValueError, TypeError):
                 continue
                 
-        # Return None or raise if critical, but for now log and return None to prevent crash
-        print(f"Date parsing failed for: {date_str}")
+        # If all parsing fails, return None
+        print(f"⚠️  Date parsing failed for: {date_str}, using default")
         return None
     
     async def process_invoice(
@@ -101,6 +101,23 @@ class Orchestrator:
                 return extraction_result
             
             data = extraction_result['data']
+            
+            # Ensure invoice_date is set (default to today if missing)
+            if not data.get('invoice_date'):
+                from datetime import datetime
+                data['invoice_date'] = datetime.utcnow().strftime('%Y-%m-%d')
+            
+            # Ensure due_date is set (default to 45 days from invoice_date if missing)
+            if not data.get('due_date') and data.get('invoice_date'):
+                from datetime import timedelta
+                invoice_date = self._parse_date(data['invoice_date'])
+                if invoice_date:
+                    data['due_date'] = (invoice_date + timedelta(days=45)).strftime('%Y-%m-%d')
+            
+            # If still no due_date, use today + 45 days
+            if not data.get('due_date'):
+                from datetime import datetime, timedelta
+                data['due_date'] = (datetime.utcnow() + timedelta(days=45)).strftime('%Y-%m-%d')
             
             # Step 2: Validate GSTIN (sync operation)
             gstin_validation = self.janitor.validate_gstin(

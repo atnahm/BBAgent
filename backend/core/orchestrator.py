@@ -256,7 +256,7 @@ class Orchestrator:
                         "agent": str(data.get('agent', 'Unknown'))
                     }
                 )
-                self.vector_memory.persist()
+                # ChromaDB v0.4+ auto-persists, no need to call persist()
                 
                 return {
                     "status": "success",

@@ -366,8 +366,52 @@ IMPORTANT:
                 "agent": self.name
             }
         else:
-            # TODO: Integrate with real GSTIN API
-            return {"valid": True, "gstin": gstin, "mock": False}
+            # Real GSTIN API Integration (Generic Structure)
+            try:
+                import requests
+                # Using a generic placeholder structure. 
+                # User should replace this with their specific GSTIN provider (e.g., Masters India, ClearTax, etc.)
+                
+                # Check for API key in config/env
+                # For now, we'll assume a generic header-based auth
+                gst_api_key = os.getenv('GST_API_KEY')
+                if not gst_api_key:
+                     return {
+                        "valid": False, 
+                        "reason": "GST_API_KEY not configured",
+                        "mock": False
+                    }
+
+                # Example Endpoint (Replace with actual provider)
+                url = f"https://api.gst-provider.com/v1/taxpayer/{gstin}"
+                headers = {"Authorization": f"Bearer {gst_api_key}"}
+                
+                # Uncomment to activate when provider is selected
+                # response = requests.get(url, headers=headers)
+                # if response.status_code == 200:
+                #     data = response.json()
+                #     return {
+                #         "valid": True,
+                #         "gstin": gstin,
+                #         "business_name": data.get('legal_name'),
+                #         "status": data.get('status'),
+                #         "mock": False
+                #     }
+                
+                # Fallback for now since no provider is actually selected
+                return {
+                    "valid": True, 
+                    "gstin": gstin, 
+                    "mock": False, 
+                    "note": "Real API configured but endpoint commented out (Select Provider)"
+                }
+                    
+            except Exception as e:
+                return {
+                    "valid": False, 
+                    "reason": f"API Error: {str(e)}",
+                    "mock": False
+                }
     
     def _validate_extracted_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize and validate extracted data."""

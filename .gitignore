@@ -1,42 +1,87 @@
-# Ignore Python cache
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Virtual environment
+# Virtual Environment
 venv/
-env/
 ENV/
+env/
+.venv/
 
-# Database files
+# Environment Variables
+.env
+*.env
+!.env.example
+
+# Database Files
 *.db
 *.sqlite3
 data/
+${DATABASE_PATH}
+${CHROMA_DB_PATH}
+
+# Backups
+backups/
+*.tar.gz
+*.zip
+
+# Temporary Files
 temp/
-
-# Vector database
-chroma_db/
-*.parquet
-
-# Environment variables
-.env
+*.tmp
+*.log
+*.bak
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+.project
+.pydevproject
+.settings/
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Logs
-*.log
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Batch Results
+batch_results_*.json
+monitoring_report.json
 
 # Streamlit
 .streamlit/
 
-# Uploaded files
-uploads/
+# Docker
+.dockerignore
+
+# Production
+production.env
+install_services.bat

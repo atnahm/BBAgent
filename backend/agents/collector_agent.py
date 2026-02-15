@@ -3,6 +3,7 @@ from google.adk.agents import BaseAgent
 from typing import Dict, Any, List, Optional
 import google.generativeai as genai
 from datetime import datetime
+from config_loader import CONFIG
 
 class CollectorAgent(BaseAgent):
     """
@@ -17,8 +18,9 @@ class CollectorAgent(BaseAgent):
             description="Generates recovery messages and manages WhatsApp automation"
         )
         
-        # Store configuration as private attributes to avoid Pydantic validation
-        object.__setattr__(self, '_mock_mode', mock_mode)
+        # Store configuration as private attributes
+        object.__setattr__(self, '_mock_mode', CONFIG['whatsapp']['mock_mode'])
+        object.__setattr__(self, '_whatsapp_config', CONFIG['whatsapp'])
         
         # Only initialize Gemini if we have an API key from environment
         try:
@@ -163,12 +165,63 @@ This is a system-generated legal notice."""
                 "agent": self.name
             }
         else:
-            # TODO: Integrate real WhatsApp Business API
-            # For production, use wwebjs or official API
-            return {
-                "status": "error",
-                "error": "Real WhatsApp integration not implemented"
-            }
+            # Real WhatsApp Business API Integration
+            try:
+                import requests
+                
+                api_key = self._whatsapp_config['api_key']
+                phone_id = self._whatsapp_config['phone_number_id']
+                
+                if not api_key or not phone_id or "Variable not set" in api_key:
+                    return {
+                        "status": "error",
+                        "error": "WhatsApp API credentials not configured in .env"
+                    }
+                
+                url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                payload = {
+                    "messaging_product": "whatsapp",
+                    "to": phone_number,
+                    "type": "text",
+                    "text": {"body": message}
+                }
+                
+                response = requests.post(url, headers=headers, json=payload)
+                response_data = response.json()
+                
+                if response.status_code == 200:
+                    return {
+                        "status": "success",
+                        "delivery_status": "sent",
+                        "phone_number": phone_number,
+                        "message_id": response_data.get('messages', [{}])[0].get('id'),
+                        "sent_at": datetime.utcnow().isoformat(),
+                        "agent": self.name
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "error": f"WhatsApp API Error: {response.text}",
+                        "agent": self.name
+                    }
+                    
+            except ImportError:
+                return {
+                    "status": "error",
+                    "error": "requests library not installed",
+                    "agent": self.name
+                }
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "error": str(e),
+                    "agent": self.name
+                }
     
     def determine_message_tier(
         self,

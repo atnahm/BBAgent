@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # Main automation service
+  automation:
+    build: .
+    container_name: bharat-biz-agent
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./temp:/app/temp
+      - ./backend/.env:/app/backend/.env
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python automate.py
+    networks:
+      - biz-agent-network
+
+  # Scheduler service
+  scheduler:
+    build: .
+    container_name: bharat-biz-scheduler
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./backend/.env:/app/backend/.env
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python scheduler.py
+    networks:
+      - biz-agent-network
+
+  # Webhook API service
+  webhook:
+    build: .
+    container_name: bharat-biz-webhook
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+      - ./temp:/app/temp
+      - ./backend/.env:/app/backend/.env
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python webhook_server.py
+    networks:
+      - biz-agent-network
+
+  # Streamlit dashboard
+  dashboard:
+    build: .
+    container_name: bharat-biz-dashboard
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./temp:/app/temp
+      - ./backend/.env:/app/backend/.env
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: streamlit run streamlit_app.py --server.address=0.0.0.0
+    networks:
+      - biz-agent-network
+
+  # Monitoring dashboard
+  monitoring:
+    build: .
+    container_name: bharat-biz-monitoring
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./backend/.env:/app/backend/.env
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python monitoring_dashboard.py --interval 30
+    networks:
+      - biz-agent-network
+
+networks:
+  biz-agent-network:
+    driver: bridge
+
+volumes:
+  data:
+  temp:

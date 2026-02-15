@@ -26,11 +26,15 @@ relational_db:
   path: "${DATABASE_PATH}"
 
 whatsapp:
-  mock_mode: true
+  mock_mode: ${WHATSAPP_MOCK_MODE}
+  api_key: "${WHATSAPP_API_KEY}"
+  phone_number_id: "${WHATSAPP_PHONE_NUMBER_ID}"
+  business_account_id: "${WHATSAPP_BUSINESS_ACCOUNT_ID}"
   test_number: "${WHATSAPP_TEST_NUMBER}"
 
 gstin:
-  mock_mode: true
+  mock_mode: ${GSTIN_MOCK_MODE}
+  api_key: "${GST_API_KEY}"
 
 compliance:
   msmed_act:

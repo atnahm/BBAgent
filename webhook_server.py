@@ -1,12 +1,15 @@
 """
 Webhook Server for External Integrations
 Receives invoice data from external systems via HTTP API.
+Secured with API Key authentication and optimized for async execution.
 """
 import asyncio
 import sys
+import os
 from pathlib import Path
 from datetime import datetime
 from flask import Flask, request, jsonify
+from functools import wraps
 import base64
 import tempfile
 
@@ -15,13 +18,44 @@ backend_path = Path(__file__).parent / 'backend'
 sys.path.insert(0, str(backend_path))
 
 from core.orchestrator import Orchestrator
+from config_loader import CONFIG
 
 app = Flask(__name__)
 orchestrator = Orchestrator()
 
+# --- Security Decorator ---
+def require_api_key(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        try:
+            api_key = request.headers.get('X-API-KEY')
+            configured_key = CONFIG.get('api', {}).get('secret_key')
+            
+            # If no key configured in env, warn but allow (or block, strict by default)
+            if not configured_key or configured_key == 'change_this_to_a_secure_random_string':
+                print("⚠️  WARNING: API_SECRET_KEY not set or using default. Security disabled.")
+                # For Audit Fix: We enforced auth, so we block if key is missing/invalid
+                if not api_key:
+                     return jsonify({'error': 'Missing API Key'}), 401
+            
+            if api_key and api_key == configured_key:
+                 return f(*args, **kwargs)
+                 
+            # Allow if key matches
+            if configured_key and api_key == configured_key:
+                return f(*args, **kwargs)
+                
+            return jsonify({'error': 'Invalid or Missing API Key'}), 401
+        except Exception as e:
+            print(f"❌ Auth Error: {e}")
+            return jsonify({'error': 'Internal Auth Error'}), 500
+    return decorated_function
+
+# --- Routes ---
+
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint."""
+    """Health check endpoint (Public)."""
     return jsonify({
         'status': 'healthy',
         'service': 'Bharat Biz-Agent',
@@ -29,20 +63,10 @@ def health_check():
     })
 
 @app.route('/api/v1/invoice/upload', methods=['POST'])
-def upload_invoice():
+@require_api_key
+async def upload_invoice():
     """
-    Upload invoice for processing.
-    
-    Request body:
-    {
-        "file_data": "base64_encoded_file",
-        "file_type": "image" or "voice",
-        "filename": "invoice.jpg",
-        "metadata": {
-            "source": "email",
-            "sender": "vendor@example.com"
-        }
-    }
+    Upload invoice for processing (Async).
     """
     try:
         data = request.get_json()
@@ -51,65 +75,65 @@ def upload_invoice():
             return jsonify({'error': 'Missing file_data'}), 400
         
         # Decode file
-        file_data = base64.b64decode(data['file_data'])
+        try:
+            file_data = base64.b64decode(data['file_data'])
+        except Exception:
+             return jsonify({'error': 'Invalid base64 data'}), 400
+
         file_type = data.get('file_type', 'image')
         filename = data.get('filename', 'invoice.jpg')
         
         # Save to temp file
         suffix = Path(filename).suffix
+        if not suffix:
+             suffix = '.jpg' # Default
+             
+        # Async file I/O not strictly necessary for temp files in Flask, 
+        # but good practice to keep main loop free if files are large.
+        # For now, standard write is fine as tmpfs is fast.
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
             tmp_file.write(file_data)
             tmp_path = tmp_file.name
         
-        # Process invoice
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        result = loop.run_until_complete(
-            orchestrator.process_invoice(tmp_path, file_type)
-        )
-        
-        loop.close()
-        
-        # Clean up
-        Path(tmp_path).unlink()
-        
-        if result['status'] == 'success':
-            return jsonify({
-                'status': 'success',
-                'transaction_id': result['transaction_id'],
-                'vendor_name': result['ingestion']['extraction']['vendor_name'],
-                'amount': result['ingestion']['extraction']['amount'],
-                'compliance_status': result['compliance']['compliance']['status'],
-                'message': 'Invoice processed successfully'
-            }), 200
-        else:
-            return jsonify({
-                'status': 'error',
-                'error': result.get('error')
-            }), 500
+        try:
+            # Process invoice - NATIVE ASYNC CALL
+            # Flask 2.0+ handles the event loop for us
+            result = await orchestrator.process_invoice(tmp_path, file_type)
+            
+            if result['status'] == 'success':
+                return jsonify({
+                    'status': 'success',
+                    'transaction_id': result['transaction_id'],
+                    'vendor_name': result['ingestion']['extraction']['vendor_name'],
+                    'amount': result['ingestion']['extraction']['amount'],
+                    'compliance_status': result['compliance']['compliance']['status'],
+                    'message': 'Invoice processed successfully'
+                }), 200
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'error': result.get('error')
+                }), 500
+                
+        finally:
+            # Clean up
+            try:
+                Path(tmp_path).unlink()
+            except Exception:
+                pass
             
     except Exception as e:
+        # Don't leak stack trace in production
+        print(f"Server Error: {e}")
         return jsonify({
             'status': 'error',
-            'error': str(e)
+            'error': 'Internal Server Error'
         }), 500
 
 @app.route('/api/v1/invoice/manual', methods=['POST'])
+@require_api_key
 def manual_entry():
-    """
-    Manual invoice entry.
-    
-    Request body:
-    {
-        "vendor_name": "ABC Corp",
-        "gstin": "29ABCDE1234F1Z5",
-        "amount": 50000.00,
-        "invoice_number": "INV-001",
-        "invoice_date": "2024-01-15",
-        "payment_terms": "45 days"
-    }
-    """
+    """Manual invoice entry (Sync)."""
     try:
         data = request.get_json()
         
@@ -117,9 +141,15 @@ def manual_entry():
         for field in required_fields:
             if field not in data:
                 return jsonify({'error': f'Missing required field: {field}'}), 400
+                
+        # Validate Amount
+        try:
+            amount = float(data['amount'])
+        except ValueError:
+             return jsonify({'error': 'Invalid amount'}), 400
         
         from memory.relational_db import Customer, Transaction
-        from datetime import timedelta
+        from utils import parse_date, calculate_due_date
         
         db_session = orchestrator.db.get_session()
         
@@ -140,18 +170,18 @@ def manual_entry():
                 db_session.commit()
             
             # Parse dates
-            from datetime import datetime
-            invoice_date = datetime.strptime(data['invoice_date'], '%Y-%m-%d')
+            invoice_date = parse_date(data['invoice_date'])
+            if not invoice_date:
+                 return jsonify({'error': 'Invalid invoice_date format'}), 400
             
             # Calculate due date
-            payment_days = int(data.get('payment_terms', '45').split()[0])
-            due_date = invoice_date + timedelta(days=payment_days)
+            due_date = calculate_due_date(invoice_date, data.get('payment_terms', '45 days'))
             
             # Create transaction
             transaction = Transaction(
                 vendor_name=data['vendor_name'],
                 gstin=data.get('gstin'),
-                amount=float(data['amount']),
+                amount=amount,
                 invoice_number=data['invoice_number'],
                 invoice_date=invoice_date,
                 due_date=due_date,
@@ -163,7 +193,7 @@ def manual_entry():
             
             # Update customer
             customer.total_transactions += 1
-            customer.total_value += float(data['amount'])
+            customer.total_value += amount
             
             db_session.commit()
             
@@ -177,12 +207,14 @@ def manual_entry():
             db_session.close()
             
     except Exception as e:
+        print(f"Error: {e}")
         return jsonify({
             'status': 'error',
-            'error': str(e)
+            'error': 'Internal Server Error'
         }), 500
 
 @app.route('/api/v1/transactions', methods=['GET'])
+@require_api_key
 def get_transactions():
     """Get all transactions with optional filters."""
     try:
@@ -223,12 +255,11 @@ def get_transactions():
             db_session.close()
             
     except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'error': str(e)
-        }), 500
+        print(f"Error: {e}")
+        return jsonify({'status': 'error', 'error': 'Internal Server Error'}), 500
 
 @app.route('/api/v1/compliance/report', methods=['GET'])
+@require_api_key
 def compliance_report():
     """Get compliance summary report."""
     try:
@@ -265,13 +296,14 @@ def compliance_report():
             db_session.close()
             
     except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'error': str(e)
-        }), 500
+        print(f"Error: {e}")
+        return jsonify({'status': 'error','error': 'Internal Server Error'}), 500
 
 if __name__ == '__main__':
-    print("🌐 Starting Webhook Server...")
+    print("🌐 Starting Secure Webhook Server...")
+    key = CONFIG.get('api', {}).get('secret_key')
+    print(f"🔐 Loaded Config Key: {key}")
+    print("🔐 Auth: X-API-KEY header required")
     print("📡 Endpoints:")
     print("   GET  /health")
     print("   POST /api/v1/invoice/upload")
@@ -280,4 +312,5 @@ if __name__ == '__main__':
     print("   GET  /api/v1/compliance/report")
     print("\n🚀 Server running on http://localhost:5000\n")
     
+    # Run async flask app
     app.run(host='0.0.0.0', port=5000, debug=False)

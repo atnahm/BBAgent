@@ -1,10 +1,12 @@
 """
 Automated Agent System Runner
 Continuously monitors for new invoices and processes them automatically.
+Optimized for concurrency and proper configuration usage.
 """
 import asyncio
 import sys
 import time
+import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 from watchdog.observers import Observer
@@ -18,15 +20,23 @@ from core.orchestrator import Orchestrator
 from memory.relational_db import Transaction, Communication, Customer
 from config_loader import CONFIG
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 class InvoiceHandler(FileSystemEventHandler):
     """Handles new invoice file uploads."""
     
-    def __init__(self, orchestrator):
+    def __init__(self, orchestrator, loop):
         self.orchestrator = orchestrator
+        self.loop = loop
         self.processing = set()
     
     def on_created(self, event):
-        """Process new invoice files automatically."""
+        """
+        Process new invoice files automatically.
+        This runs in a thread pool managed by watchdog.
+        We must schedule the async task on the main event loop thread-safely.
+        """
         if event.is_directory:
             return
         
@@ -47,10 +57,12 @@ class InvoiceHandler(FileSystemEventHandler):
         # Determine source type
         source_type = 'voice' if file_path.lower().endswith(('.mp3', '.wav', '.m4a')) else 'image'
         
-        # Process asynchronously
-        asyncio.run(self._process_invoice(file_path, source_type))
-        
-        self.processing.remove(file_path)
+        # Schedule the coroutine one the main loop
+        # We use run_coroutine_threadsafe because on_created is called from a different thread
+        asyncio.run_coroutine_threadsafe(
+            self._process_invoice(file_path, source_type), 
+            self.loop
+        )
     
     async def _process_invoice(self, file_path, source_type):
         """Process invoice through full workflow."""
@@ -62,8 +74,8 @@ class InvoiceHandler(FileSystemEventHandler):
             if result['status'] == 'success':
                 print(f"  ✅ Invoice processed successfully!")
                 print(f"     Transaction ID: {result['transaction_id']}")
-                print(f"     Vendor: {result['ingestion']['extraction']['vendor_name']}")
-                print(f"     Amount: ₹{result['ingestion']['extraction']['amount']:,.2f}")
+                val = result['ingestion']['extraction']['amount']
+                print(f"     Amount: ₹{val:,.2f}" if isinstance(val, (int, float)) else f"     Amount: {val}")
                 print(f"     Strategy: {result['strategy']['recommendation']}")
                 
                 if result.get('message') and result['message'].get('requires_hitl_approval'):
@@ -72,9 +84,12 @@ class InvoiceHandler(FileSystemEventHandler):
                     print(f"  📤 Message sent automatically")
             else:
                 print(f"  ❌ Error: {result.get('error')}")
-                
+        
         except Exception as e:
             print(f"  ❌ Processing error: {str(e)}")
+        finally:
+            if file_path in self.processing:
+                self.processing.remove(file_path)
 
 class ComplianceMonitor:
     """Monitors transactions for compliance violations."""
@@ -91,18 +106,27 @@ class ComplianceMonitor:
                 Transaction.status.in_(['pending', 'overdue'])
             ).all()
             
+            if not pending_txns:
+                return
+
             print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔍 Checking {len(pending_txns)} transactions...")
             
             for txn in pending_txns:
                 # Check compliance
+                # context format needs to match what agent expects
+                context = {
+                    'invoice_date': txn.invoice_date.strftime('%Y-%m-%d') if txn.invoice_date else None,
+                    'due_date': txn.due_date.strftime('%Y-%m-%d') if txn.due_date else None,
+                    'amount': txn.amount,
+                    'payment_date': txn.payment_date.strftime('%Y-%m-%d') if txn.payment_date else None
+                }
+
+                if not context['invoice_date']:
+                    continue
+
                 compliance_result = await self.orchestrator.compliance.run(
                     task="check_transaction",
-                    context={
-                        'invoice_date': txn.invoice_date.strftime('%Y-%m-%d'),
-                        'due_date': txn.due_date.strftime('%Y-%m-%d'),
-                        'amount': txn.amount,
-                        'payment_date': txn.payment_date.strftime('%Y-%m-%d') if txn.payment_date else None
-                    }
+                    context=context
                 )
                 
                 # Update transaction
@@ -179,23 +203,15 @@ class AutomatedSystem:
     def __init__(self):
         print("🚀 Initializing Automated Agent System...")
         self.orchestrator = Orchestrator()
-        self.invoice_handler = InvoiceHandler(self.orchestrator)
-        self.compliance_monitor = ComplianceMonitor(self.orchestrator)
         
-        # Setup file watcher
+        # Get threshold from config
+        self.auto_approve_limit = CONFIG.get('automation', {}).get('auto_approve_limit', 10000)
+        
+        # Setup file watcher will be done in start() where we have the loop
         self.observer = Observer()
-        watch_dir = Path("temp")
-        watch_dir.mkdir(exist_ok=True)
+        self.watch_dir = Path("temp")
+        self.watch_dir.mkdir(exist_ok=True)
         
-        self.observer.schedule(self.invoice_handler, str(watch_dir), recursive=False)
-        
-        print(f"✅ Watching directory: {watch_dir.absolute()}")
-        print(f"✅ Compliance monitoring: Every 1 hour")
-        print(f"✅ Auto-approval: Enabled for low-risk actions")
-        print("\n" + "="*60)
-        print("SYSTEM READY - Drop invoices in 'temp' folder")
-        print("="*60 + "\n")
-    
     async def run_compliance_loop(self):
         """Run compliance checks periodically."""
         while True:
@@ -221,7 +237,8 @@ class AutomatedSystem:
                     txn = db_session.query(Transaction).get(comm.transaction_id)
                     
                     # Auto-approve friendly reminders for low-value transactions
-                    if comm.message_type == 'friendly_reminder' and txn.amount < 10000:
+                    # Configurable Limit
+                    if comm.message_type == 'friendly_reminder' and txn.amount < self.auto_approve_limit:
                         print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ✅ Auto-approving friendly reminder (₹{txn.amount:,.2f})")
                         
                         # Send message
@@ -248,12 +265,23 @@ class AutomatedSystem:
     
     def start(self):
         """Start the automated system."""
-        # Start file watcher
-        self.observer.start()
-        
-        # Run async tasks
+        # Create event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        
+        self.invoice_handler = InvoiceHandler(self.orchestrator, loop)
+        self.compliance_monitor = ComplianceMonitor(self.orchestrator)
+        
+        # Schedule the watcher
+        self.observer.schedule(self.invoice_handler, str(self.watch_dir), recursive=False)
+        self.observer.start()
+        
+        print(f"✅ Watching directory: {self.watch_dir.absolute()}")
+        print(f"✅ Compliance monitoring: Every 1 hour")
+        print(f"✅ Auto-approval: Enabled (< ₹{self.auto_approve_limit:,.0f})")
+        print("\n" + "="*60)
+        print("SYSTEM READY - Drop invoices in 'temp' folder")
+        print("="*60 + "\n")
         
         try:
             # Run both compliance monitoring and auto-approval concurrently
@@ -264,9 +292,9 @@ class AutomatedSystem:
         except KeyboardInterrupt:
             print("\n\n🛑 Shutting down automated system...")
             self.observer.stop()
-        
-        self.observer.join()
-        loop.close()
+        finally:
+            self.observer.join()
+            loop.close()
 
 if __name__ == "__main__":
     system = AutomatedSystem()

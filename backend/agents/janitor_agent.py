@@ -15,63 +15,36 @@ class JanitorAgent(BaseAgent):
     
     def __init__(
         self,
-        provider: str = "gemini",
-        gemini_config: Optional[Dict[str, Any]] = None,
         huggingface_config: Optional[Dict[str, Any]] = None
     ):
-        """Initialize Janitor Agent with configurable LLM provider."""
+        """Initialize Janitor Agent with HuggingFace OCR only."""
         super().__init__(
             name="JanitorAgent",
-            description="Extracts structured data from invoices (images/voice)"
+            description="Extracts structured data from invoices using Vision OCR"
         )
-        object.__setattr__(self, '_model_name', "multi-provider")
+        object.__setattr__(self, '_model_name', "huggingface-vision")
         object.__setattr__(self, '_model', None)
         
-        # Store default provider
-        object.__setattr__(self, '_default_provider', provider)
-        
-        # Initialize Gemini (if config provided)
-        if gemini_config and gemini_config.get('api_key'):
-            import google.generativeai as genai
-            api_key = gemini_config.get('api_key')
-            # Use stable model name
-            model_name = gemini_config.get('model', 'gemini-1.5-flash')
-            
-            try:
-                genai.configure(api_key=api_key)
-                object.__setattr__(self, '_gemini_api_key', api_key)
-                object.__setattr__(self, '_gemini_model_name', model_name)
-                object.__setattr__(self, '_gemini_model', genai.GenerativeModel(model_name))
-            except Exception as e:
-                print(f"Warning: Failed to initialize Gemini: {e}")
-                object.__setattr__(self, '_gemini_model', None)
-        else:
-            object.__setattr__(self, '_gemini_model', None)
-
-        # Initialize HuggingFace (if config provided)
+        # Initialize HuggingFace Vision OCR (ONLY provider)
         if huggingface_config and huggingface_config.get('api_key'):
             from huggingface_hub import InferenceClient
             api_key = huggingface_config.get('api_key')
             model_name = huggingface_config.get('model', 'Qwen/Qwen2.5-VL-7B-Instruct')
-            use_local = huggingface_config.get('use_local', False)
             
             object.__setattr__(self, '_hf_api_key', api_key)
             object.__setattr__(self, '_hf_model_name', model_name)
-            object.__setattr__(self, '_use_local', use_local)
             
-            if not use_local:
-                try:
-                    object.__setattr__(self, '_hf_client', InferenceClient(
-                        model=model_name,
-                        token=api_key
-                    ))
-                except Exception as e:
-                    print(f"Warning: Failed to initialize HuggingFace: {e}")
-                    object.__setattr__(self, '_hf_client', None)
-            else:
-                 # Local inference placeholder
-                 object.__setattr__(self, '_hf_client', None)
+            try:
+                object.__setattr__(self, '_hf_client', InferenceClient(
+                    model=model_name,
+                    token=api_key
+                ))
+                print(f"✅ HuggingFace Vision OCR initialized: {model_name}")
+            except Exception as e:
+                print(f"❌ Failed to initialize HuggingFace: {e}")
+                object.__setattr__(self, '_hf_client', None)
         else:
+            print("⚠️ HuggingFace not configured. OCR will not work.")
             object.__setattr__(self, '_hf_client', None)
     
     async def run(self, task: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -95,30 +68,23 @@ class JanitorAgent(BaseAgent):
             return {"error": f"Unknown task: {task}"}
     
     async def process_invoice_image(self, image_path: str, provider: Optional[str] = None) -> Dict[str, Any]:
-        """Extract invoice data from image using configured VLM provider."""
-        # Use passed provider or default, falling back to Gemini if invalid
-        active_provider = provider or self._default_provider
+        """Extract invoice data from image using HuggingFace Vision OCR."""
+        if not self._hf_client:
+            return {
+                "status": "error",
+                "error": "HuggingFace Vision OCR not configured. Please set HUGGINGFACE_API_KEY in .env"
+            }
         
-        if active_provider == "gemini":
-            if not self._gemini_model:
-                return {"status": "error", "error": "Gemini not configured"}
-            result = await self._process_with_gemini(image_path)
-            
-        elif active_provider == "huggingface":
-            if not self._hf_client:
-                return {"status": "error", "error": "HuggingFace not configured"}
-            result = await self._process_with_huggingface(image_path)
-            
-        else:
-            return {"status": "error", "error": f"Unknown provider: {active_provider}"}
-            
-        # Post-process validation
+        result = await self._process_with_huggingface(image_path)
+        return self._post_process_result(result)
+    
+    def _post_process_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Post-process and validate extraction result."""
         if result.get('status') == 'success' and result.get('data'):
             try:
                 result['data'] = self._validate_extracted_data(result['data'])
             except Exception as e:
                 print(f"Validation warning: {e}")
-                
         return result
     
     async def _process_with_gemini(self, image_path: str) -> Dict[str, Any]:
@@ -343,16 +309,17 @@ IMPORTANT:
                 "error": str(e)
             }
     
+    
     def validate_gstin(self, gstin: Optional[str], mock_mode: bool = True) -> Dict[str, Any]:
         """Validate GSTIN format and optionally check with API."""
+        from utils import validate_gstin_checksum, get_state_from_gstin
+        
         if not gstin:
             return {"valid": False, "reason": "GSTIN not provided"}
         
-        # Basic format validation
-        gstin_pattern = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'
-        
-        if not re.match(gstin_pattern, gstin):
-            return {"valid": False, "reason": "Invalid GSTIN format"}
+        # Basic validation + Checksum
+        if not validate_gstin_checksum(gstin):
+             return {"valid": False, "reason": "Invalid GSTIN format or checksum"}
         
         if mock_mode:
             # Mock validation for POC
@@ -360,7 +327,7 @@ IMPORTANT:
                 "valid": True,
                 "gstin": gstin,
                 "business_name": f"Mock Business for {gstin[:2]}",
-                "state": self._get_state_from_gstin(gstin),
+                "state": get_state_from_gstin(gstin),
                 "status": "Active",
                 "mock": True,
                 "agent": self.name
@@ -415,16 +382,8 @@ IMPORTANT:
     
     def _validate_extracted_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize and validate extracted data."""
-        # Parse payment terms to calculate due date
-        # Helper to parse dates flexibly
-        def parse_date(date_str):
-            for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%Y/%m/%d'):
-                try:
-                    return datetime.strptime(date_str, fmt)
-                except ValueError:
-                    pass
-            return None
-
+        from utils import parse_date
+        
         if data.get('invoice_date'):
             invoice_date = parse_date(data['invoice_date'])
             
@@ -447,16 +406,9 @@ IMPORTANT:
             data['gstin'] = data['gstin'].upper().replace(' ', '')
         
         return data
-    
+
     def _get_state_from_gstin(self, gstin: str) -> str:
-        """Extract state from GSTIN code."""
-        state_codes = {
-            "01": "Jammu and Kashmir", "02": "Himachal Pradesh", "03": "Punjab",
-            "04": "Chandigarh", "05": "Uttarakhand", "06": "Haryana",
-            "07": "Delhi", "08": "Rajasthan", "09": "Uttar Pradesh",
-            "10": "Bihar", "11": "Sikkim", "12": "Arunachal Pradesh",
-            "19": "West Bengal", "27": "Maharashtra", "29": "Karnataka", 
-            "32": "Kerala", "33": "Tamil Nadu", "36": "Telangana"
-        }
-        state_code = gstin[:2]
-        return state_codes.get(state_code, "Unknown")
+        """Deprecated: Use utils.get_state_from_gstin instead."""
+        from utils import get_state_from_gstin
+        return get_state_from_gstin(gstin)
+

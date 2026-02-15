@@ -19,9 +19,12 @@ from memory.relational_db import Transaction, Communication
 
 # Page config
 st.set_page_config(
-    page_title="Bharat Biz-Agent",
+    page_title="Bharat Biz-Agent | Enterprise Compliance",
     page_icon="🇮🇳",
-    layout="wide"
+    layout="wide",
+    menu_items={
+        'About': "Enterprise-grade MSMED Act compliance and recovery platform"
+    }
 )
 
 # Initialize orchestrator
@@ -33,9 +36,39 @@ def get_orchestrator():
 
 orchestrator = get_orchestrator()
 
-# Sidebar
+# Sidebar - Professional Design
 st.sidebar.title("🇮🇳 Bharat Biz-Agent")
-st.sidebar.caption("Powered by Google ADK")
+st.sidebar.caption("Enterprise Compliance Platform")
+
+# Advanced Features Section
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚙️ Advanced Features")
+
+# Check if advanced features are configured
+import os
+hf_api_key = os.getenv('HUGGINGFACE_API_KEY')
+advanced_enabled = hf_api_key and hf_api_key != 'your_huggingface_api_key_here'
+
+if advanced_enabled:
+    st.sidebar.success("✅ Advanced Analytics Enabled")
+    
+    # Feature toggles with professional naming
+    use_predictive_risk = st.sidebar.checkbox("Predictive Risk Analysis", value=True, help="Advanced risk assessment with predictive modeling")
+    use_smart_messages = st.sidebar.checkbox("Smart Message Composer", value=True, help="Intelligent message generation with context awareness")
+    use_strategic_insights = st.sidebar.checkbox("Strategic Insights", value=True, help="Data-driven strategic recommendations")
+    
+    # Store in session state
+    st.session_state['use_ai_risk'] = use_predictive_risk
+    st.session_state['use_ai_messages'] = use_smart_messages
+    st.session_state['use_ai_strategy'] = use_strategic_insights
+else:
+    st.sidebar.info("ℹ️ Standard Mode Active")
+    st.sidebar.caption("Contact admin to enable advanced features")
+    st.session_state['use_ai_risk'] = False
+    st.session_state['use_ai_messages'] = False
+    st.session_state['use_ai_strategy'] = False
+
+st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
     ["📊 Dashboard", "📤 Upload Invoice", "✅ Approve Messages", "📝 Manual Entry", "📈 Reports"]
@@ -43,8 +76,8 @@ page = st.sidebar.radio(
 
 # Dashboard Page
 if page == "📊 Dashboard":
-    st.title("📊 Dashboard Overview")
-    st.caption("Google ADK Multi-Agent System")
+    st.title("📊 Business Intelligence Dashboard")
+    st.caption("Real-time compliance monitoring and analytics")
     
     # Get stats directly (synchronous database queries)
     db_session = orchestrator.db.get_session()
@@ -79,20 +112,57 @@ if page == "📊 Dashboard":
     if len(pending_approvals) > 0:
         st.warning(f"⚠️ {len(pending_approvals)} messages pending HITL approval")
     
-    # Agent status
-    st.subheader("🤖 Agent Status (ADK)")
+    # System Status - Professional Layout
+    st.subheader("🔧 System Components")
     agent_cols = st.columns(4)
     
+    # Check advanced features status
+    mode_label = "Advanced" if advanced_enabled else "Standard"
+    
     agents = [
-        ("🧹 Janitor", "Extraction", "✅ Active"),
-        ("📋 Compliance", "Monitoring", "✅ Active"),
-        ("💬 Collector", "Recovery", "✅ Active"),
-        ("⚖️ Arbitrator", "Governance", "✅ Active")
+        ("📄 Data Extraction", "Invoice Processing", "✅ Operational", "OCR Enabled"),
+        ("⚖️ Compliance Monitor", "MSMED Act Tracking", "✅ Operational", f"{mode_label} Analytics"),
+        ("📧 Communication", "Recovery Management", "✅ Operational", f"{mode_label} Composer"),
+        ("🎯 Strategy Engine", "Decision Support", "✅ Operational", f"{mode_label} Insights")
     ]
     
-    for col, (name, role, status) in zip(agent_cols, agents):
+    for col, (name, role, status, feature) in zip(agent_cols, agents):
         with col:
-            st.info(f"**{name}**\n\n{role}\n\n{status}")
+            st.info(f"**{name}**\n\n{role}\n\n{status}\n\n{feature}")
+    
+    # Advanced Features Overview
+    if advanced_enabled:
+        st.markdown("---")
+        st.subheader("🎯 Advanced Capabilities")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**📊 Compliance Analytics**")
+            st.markdown("""
+            - Predictive Risk Modeling
+            - Pattern Recognition
+            - Executive Summaries
+            - Anomaly Detection
+            """)
+        
+        with col2:
+            st.markdown("**💼 Smart Communications**")
+            st.markdown("""
+            - Context-Aware Messaging
+            - Tone Optimization
+            - Multi-Language Support
+            - Cultural Adaptation
+            """)
+        
+        with col3:
+            st.markdown("**📈 Strategic Intelligence**")
+            st.markdown("""
+            - Data-Driven Recommendations
+            - Negotiation Strategies
+            - Relationship Analytics
+            - Risk-Benefit Analysis
+            """)
     
     db_session.close()
 
@@ -100,19 +170,14 @@ if page == "📊 Dashboard":
 elif page == "📤 Upload Invoice":
     # Sidebar specific options for Upload Invoice
     st.sidebar.markdown("---")
-    st.sidebar.subheader("⚙️ AI Configuration")
-    ai_provider = st.sidebar.radio(
-        "Select AI Model:",
-        ["HuggingFace (Images Only)", "Gemini (PDFs & Images)"],
-        index=0 if os.getenv('LLM_PROVIDER') == 'huggingface' else 1,
-        help="Use Gemini for PDFs. HuggingFace works best with Images."
-    )
+    st.sidebar.subheader("⚙️ Processing Options")
     
-    # Map selection to provider code
-    provider_code = "huggingface" if "HuggingFace" in ai_provider else "gemini"
+    # HuggingFace is the only provider now
+    provider_code = "huggingface"  # Always use HuggingFace
+    st.sidebar.info("Using HuggingFace Vision OCR for extraction")
 
-    st.title("📤 Upload Invoice")
-    st.caption("Async workflow with Google ADK")
+    st.title("📤 Invoice Processing")
+    st.caption("Automated data extraction and compliance analysis")
     
     from PIL import Image
     import io
@@ -126,9 +191,8 @@ elif page == "📤 Upload Invoice":
         if uploaded_file:
             # Show preview
             if uploaded_file.type == "application/pdf":
-                st.info("📄 PDF uploaded - will be processed for text extraction")
-                if provider_code == "huggingface":
-                    st.warning("⚠️ **Note:** HuggingFace mode does not support PDFs. Please switch to **Gemini** in the sidebar.")
+                st.error("❌ PDF files are not supported. Please upload an image (JPG/PNG) instead.")
+                st.stop()  # Stop execution for PDFs
             else:
                 try:
                     # Reset pointer and open image
@@ -138,8 +202,8 @@ elif page == "📤 Upload Invoice":
                 except Exception as e:
                     st.error(f"Error displaying image: {e}")
             
-            if st.button("🔍 Extract Data", type="primary"):
-                with st.spinner(f"Processing with {ai_provider}..."):
+            if st.button("🔍 Process Invoice", type="primary"):
+                with st.spinner("Analyzing with HuggingFace Vision OCR..."):
                     # Create temp file
                     suffix = ".pdf" if uploaded_file.type == "application/pdf" else ".jpg"
                     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
@@ -165,25 +229,88 @@ elif page == "📤 Upload Invoice":
                         if result['status'] == 'success':
                             st.success("✅ Invoice processed successfully!")
                             
-                            extraction = result['ingestion']['extraction']
-                            st.json(extraction)
+                            # Create tabs for organized display
+                            result_tabs = st.tabs(["📋 Extraction", "⚖️ Compliance", "💬 Message", "🎯 Strategy"])
                             
-                            # Compliance status
-                            compliance = result['compliance']['compliance']
-                            if compliance['alert_level'] != 'none':
-                                st.warning(f"⚠️ Alert: {compliance['alert_level']}")
+                            with result_tabs[0]:
+                                st.subheader("Extracted Data")
+                                extraction = result['ingestion']['extraction']
+                                st.json(extraction)
                             
-                            # Strategy
-                            strategy = result['strategy']
-                            st.info(f"**Strategy**: {strategy['recommendation']}\n\n{strategy['reasoning']}")
-                            
-                            # Message
-                            if result.get('message'):
-                                st.write("**Generated Message:**")
-                                st.code(result['message']['message_text'])
+                            with result_tabs[1]:
+                                st.subheader("Compliance Analysis")
+                                compliance = result['compliance']['compliance']
                                 
-                                if result['message']['requires_hitl_approval']:
-                                    st.warning("🔒 Message queued for HITL approval")
+                                # Alert level
+                                if compliance['alert_level'] != 'none':
+                                    st.warning(f"⚠️ Alert Level: {compliance['alert_level'].upper()}")
+                                else:
+                                    st.success("✅ No compliance issues")
+                                
+                                # Display compliance details
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.metric("Days Overdue", compliance.get('days_overdue', 0))
+                                    st.metric("Interest Amount", f"₹{compliance.get('interest_amount', 0):,.2f}")
+                                with col2:
+                                    st.metric("Status", compliance.get('status', 'N/A'))
+                                    legal_flag = "Yes" if compliance.get('legal_flag') else "No"
+                                    st.metric("Legal Flag", legal_flag)
+                                
+                                # Advanced Risk Analysis (if available)
+                                if result['compliance'].get('ai_risk_analysis'):
+                                    st.markdown("---")
+                                    st.markdown("**📊 Predictive Risk Analysis**")
+                                    ai_analysis = result['compliance']['ai_risk_analysis']
+                                    if ai_analysis.get('status') == 'success':
+                                        st.info(ai_analysis.get('ai_analysis', 'No analysis available'))
+                                        st.caption("Powered by Advanced Analytics Engine")
+                            
+                            with result_tabs[2]:
+                                st.subheader("Recovery Message")
+                                if result.get('message'):
+                                    msg = result['message']
+                                    
+                                    # Show message type
+                                    if msg.get('ai_generated'):
+                                        st.success("✨ Smart Composer - Context-Optimized Message")
+                                    else:
+                                        st.info("📋 Standard Template Message")
+                                    
+                                    st.code(msg['message_text'], language=None)
+                                    
+                                    # HITL status
+                                    if msg['requires_hitl_approval']:
+                                        st.warning("🔒 Message queued for HITL approval")
+                                    else:
+                                        st.success("✅ Auto-approved")
+                                    
+                                    # Message details
+                                    st.caption(f"Tier: {msg.get('tier', 'N/A')} | Phone: {msg.get('phone_number', 'N/A')}")
+                                else:
+                                    st.info("No message generated")
+                            
+                            with result_tabs[3]:
+                                st.subheader("Strategic Recommendation")
+                                strategy = result['strategy']
+                                
+                                # Show strategy type
+                                if strategy.get('ai_recommendation'):
+                                    st.success("📈 Strategic Intelligence - Advanced Analysis")
+                                    st.markdown(strategy['ai_recommendation'])
+                                    
+                                    # Additional metrics
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        st.metric("Relationship Score", f"{strategy.get('relationship_score', 0)}/100")
+                                    with col2:
+                                        st.metric("Risk Score", f"{strategy.get('transaction_risk_score', 0)}/100")
+                                    with col3:
+                                        st.metric("Customer Tier", strategy.get('customer_tier', 'N/A').upper())
+                                else:
+                                    st.info("📋 Standard Analysis")
+                                    st.markdown(f"**Recommendation:** {strategy['recommendation']}")
+                                    st.markdown(f"**Reasoning:** {strategy['reasoning']}")
                         else:
                             st.error(f"Error: {result.get('error')}")
                     

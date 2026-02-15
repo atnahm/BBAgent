@@ -6,7 +6,8 @@ from dotenv import load_dotenv
 from typing import Any, Dict
 
 # Load environment variables
-load_dotenv()
+env_path = Path(__file__).parent / '.env'
+load_dotenv(dotenv_path=env_path)
 
 def load_config(config_path: str = "config.yaml") -> Dict[str, Any]:
     """Load configuration from YAML file with env var substitution."""

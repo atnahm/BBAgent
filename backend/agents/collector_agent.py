@@ -33,6 +33,32 @@ class CollectorAgent(BaseAgent):
                 object.__setattr__(self, '_model', None)
         except:
             object.__setattr__(self, '_model', None)
+        
+        # Initialize AI client for message generation
+        try:
+            from utils import AIModelClient
+            
+            hf_api_key = os.getenv('HUGGINGFACE_API_KEY')
+            ai_config = CONFIG.get('ai_models', {}).get('huggingface', {})
+            collector_model = ai_config.get('models', {}).get('collector_llm', 'meta-llama/Llama-3.2-3B-Instruct')
+            
+            if hf_api_key and hf_api_key != 'your_huggingface_api_key_here':
+                object.__setattr__(self, '_ai_client', AIModelClient(
+                    api_key=hf_api_key,
+                    model_name=collector_model,
+                    timeout=ai_config.get('timeout', 30),
+                    max_retries=ai_config.get('max_retries', 3)
+                ))
+                object.__setattr__(self, '_ai_enabled', True)
+                print(f"✅ CollectorAgent AI enabled with {collector_model}")
+            else:
+                object.__setattr__(self, '_ai_client', None)
+                object.__setattr__(self, '_ai_enabled', False)
+                print("⚠️ CollectorAgent AI disabled (no API key)")
+        except Exception as e:
+            print(f"⚠️ Failed to initialize AI for CollectorAgent: {e}")
+            object.__setattr__(self, '_ai_client', None)
+            object.__setattr__(self, '_ai_enabled', False)
     
     async def run(self, task: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -47,6 +73,14 @@ class CollectorAgent(BaseAgent):
         """
         if task == "generate_message":
             return self.generate_message(
+                tier=context['tier'],
+                transaction=context['transaction'],
+                compliance_status=context['compliance_status'],
+                customer=context['customer']
+            )
+        elif task == "generate_ai_message":
+            # NEW: AI-powered message generation
+            return await self.generate_ai_message(
                 tier=context['tier'],
                 transaction=context['transaction'],
                 compliance_status=context['compliance_status'],
@@ -273,3 +307,96 @@ This is a system-generated legal notice."""
             return True
         
         return False
+    
+    # ========================================================================
+    # AI-Powered Methods
+    # ========================================================================
+    
+    async def generate_ai_message(
+        self,
+        tier: str,
+        transaction: Dict[str, Any],
+        compliance_status: Dict[str, Any],
+        customer: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Generate personalized WhatsApp message using AI.
+        Falls back to template-based generation if AI unavailable.
+        """
+        if not self._ai_enabled or not self._ai_client:
+            # Fallback to template-based generation
+            return self.generate_message(tier, transaction, compliance_status, customer)
+        
+        vendor_name = transaction.get('vendor_name', 'Customer')
+        amount = transaction.get('amount', 0)
+        invoice_num = transaction.get('invoice_number', 'N/A')
+        days_overdue = compliance_status.get('days_overdue', 0)
+        days_until_due = compliance_status.get('days_until_due', 0)
+        interest_amount = compliance_status.get('interest_amount', 0)
+        relationship_score = customer.get('relationship_score', 50)
+        
+        # Determine tone and requirements based on tier
+        if tier == "friendly_reminder":
+            tone = "friendly and respectful"
+            requirements = "Use Hindi-English mix (Hinglish), keep it warm and casual, under 200 characters"
+            requires_hitl = False
+        elif tier == "formal_notice":
+            tone = "professional and firm"
+            requirements = "Professional English, mention MSMED Act, include interest calculation, under 300 characters"
+            requires_hitl = True
+        elif tier == "legal_notice":
+            tone = "formal and authoritative"
+            requirements = "Legal English, cite MSMED Act 2006 and Section 43B(h), mention consequences, under 350 characters"
+            requires_hitl = True
+        else:
+            return {"error": f"Invalid tier: {tier}"}
+        
+        # Construct prompt
+        prompt = f"""Generate a WhatsApp payment reminder message:
+
+Context:
+- Customer: {vendor_name} (Relationship Score: {relationship_score}/100)
+- Invoice: {invoice_num}
+- Amount: ₹{amount:,.2f}
+- Days Overdue: {days_overdue} (Due in: {days_until_due} days)
+- Interest Accrued: ₹{interest_amount:,.2f}
+- Message Tier: {tier}
+
+Requirements:
+- Tone: {tone}
+- {requirements}
+- Include emoji where appropriate
+- Culturally appropriate for Indian MSME business
+- Do NOT include sender signature or company name
+
+Generate ONLY the message text:"""
+
+        system_prompt = "You are an expert in Indian business communication, specializing in payment recovery messages for MSME transactions. Generate culturally appropriate, effective WhatsApp messages."
+        
+        # Call AI
+        result = await self._ai_client.generate_text(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            max_tokens=200,
+            temperature=0.8
+        )
+        
+        if result['status'] == 'success':
+            message_text = result['text'].strip()
+            
+            return {
+                "status": "success",
+                "tier": tier,
+                "message_text": message_text,
+                "requires_hitl_approval": requires_hitl,
+                "phone_number": customer.get('phone_number'),
+                "transaction_id": transaction.get('id'),
+                "generated_at": datetime.utcnow().isoformat(),
+                "ai_generated": True,
+                "model": result.get('model'),
+                "agent": self.name
+            }
+        else:
+            # Fallback to template on AI failure
+            print(f"⚠️ AI message generation failed: {result.get('error')}. Using template.")
+            return self.generate_message(tier, transaction, compliance_status, customer)

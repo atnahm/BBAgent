@@ -27,6 +27,34 @@ class ComplianceAgent(BaseAgent):
         object.__setattr__(self, '_interest_multiplier', interest_multiplier)
         object.__setattr__(self, '_bank_rate_percent', bank_rate_percent)
         object.__setattr__(self, '_section_43b_h_enabled', section_43b_h)
+        
+        # Initialize AI client for risk analysis
+        try:
+            import os
+            from utils import AIModelClient
+            from config_loader import CONFIG
+            
+            api_key = os.getenv('HUGGINGFACE_API_KEY')
+            ai_config = CONFIG.get('ai_models', {}).get('huggingface', {})
+            model_name = ai_config.get('models', {}).get('compliance_llm', 'meta-llama/Llama-3.2-3B-Instruct')
+            
+            if api_key and api_key != 'your_huggingface_api_key_here':
+                object.__setattr__(self, '_ai_client', AIModelClient(
+                    api_key=api_key,
+                    model_name=model_name,
+                    timeout=ai_config.get('timeout', 30),
+                    max_retries=ai_config.get('max_retries', 3)
+                ))
+                object.__setattr__(self, '_ai_enabled', True)
+                print(f"✅ ComplianceAgent AI enabled with {model_name}")
+            else:
+                object.__setattr__(self, '_ai_client', None)
+                object.__setattr__(self, '_ai_enabled', False)
+                print("⚠️ ComplianceAgent AI disabled (no API key)")
+        except Exception as e:
+            print(f"⚠️ Failed to initialize AI for ComplianceAgent: {e}")
+            object.__setattr__(self, '_ai_client', None)
+            object.__setattr__(self, '_ai_enabled', False)
     
     async def run(self, task: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -54,6 +82,18 @@ class ComplianceAgent(BaseAgent):
         elif task == "annual_summary":
             return self.calculate_financial_year_compliance(
                 transactions=context['transactions']
+            )
+        elif task == "analyze_risk":
+            # NEW: AI-powered risk analysis
+            return await self.analyze_compliance_risk(
+                transaction=context['transaction'],
+                customer_history=context.get('customer_history', {})
+            )
+        elif task == "generate_summary":
+            # NEW: AI-generated compliance summary
+            return await self.generate_compliance_summary(
+                compliance_status=context['compliance_status'],
+                transaction=context['transaction']
             )
         else:
             return {"error": f"Unknown task: {task}"}
@@ -204,3 +244,129 @@ class ComplianceAgent(BaseAgent):
             "tax_risk_transactions": section_43b_h_violations,
             "agent": self.name
         }
+    
+    # ========================================================================
+    # AI-Powered Methods
+    # ========================================================================
+    
+    async def analyze_compliance_risk(
+        self,
+        transaction: Dict[str, Any],
+        customer_history: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        AI-powered risk analysis for compliance scenarios.
+        Falls back to rule-based analysis if AI unavailable.
+        """
+        if not self._ai_enabled or not self._ai_client:
+            return {
+                "status": "fallback",
+                "risk_level": "unknown",
+                "message": "AI analysis unavailable, using rule-based logic",
+                "agent": self.name
+            }
+        
+        # Prepare context
+        customer_history = customer_history or {}
+        avg_delay = customer_history.get('avg_payment_delay_days', 0)
+        total_txns = customer_history.get('total_transactions', 0)
+        
+        # Construct prompt
+        prompt = f"""Analyze this MSME payment compliance scenario and provide risk assessment:
+
+Transaction Details:
+- Vendor: {transaction.get('vendor_name', 'Unknown')}
+- Amount: ₹{transaction.get('amount', 0):,.2f}
+- Days Overdue: {transaction.get('days_overdue', 0)}
+- Interest Accrued: ₹{transaction.get('interest_amount', 0):,.2f}
+- Legal Flag: {transaction.get('legal_flag', False)}
+
+Customer Payment History:
+- Average Delay: {avg_delay} days
+- Total Transactions: {total_txns}
+
+MSMED Act Context:
+- Payment limit: {self._payment_limit_days} days
+- Interest rate: {self._interest_multiplier * self._bank_rate_percent}% p.a.
+- Section 43B(h) applies: {self._section_43b_h_enabled}
+
+Provide a structured analysis with:
+1. Risk Level (Low/Medium/High/Critical)
+2. Key Risk Factors (2-3 bullet points)
+3. Recommended Action
+4. Predicted Payment Timeline"""
+
+        system_prompt = "You are an MSME compliance expert analyzing payment risk scenarios under Indian MSMED Act 2006."
+        
+        # Call AI
+        result = await self._ai_client.generate_text(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            max_tokens=400,
+            temperature=0.5
+        )
+        
+        if result['status'] == 'success':
+            return {
+                "status": "success",
+                "ai_analysis": result['text'],
+                "model": result.get('model'),
+                "agent": self.name
+            }
+        else:
+            return {
+                "status": "error",
+                "error": result.get('error'),
+                "agent": self.name
+            }
+    
+    async def generate_compliance_summary(
+        self,
+        compliance_status: Dict[str, Any],
+        transaction: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Generate human-readable compliance summary using AI.
+        """
+        if not self._ai_enabled or not self._ai_client:
+            # Fallback to simple template
+            return {
+                "status": "fallback",
+                "summary": f"Transaction of ₹{transaction.get('amount', 0):,.2f} is {compliance_status.get('status')}. "
+                          f"Days overdue: {compliance_status.get('days_overdue', 0)}. "
+                          f"Interest: ₹{compliance_status.get('interest_amount', 0):,.2f}.",
+                "agent": self.name
+            }
+        
+        prompt = f"""Generate a concise compliance summary for this MSME payment:
+
+Status: {compliance_status.get('status')}
+Amount: ₹{transaction.get('amount', 0):,.2f}
+Vendor: {transaction.get('vendor_name')}
+Days Overdue: {compliance_status.get('days_overdue', 0)}
+Interest Accrued: ₹{compliance_status.get('interest_amount', 0):,.2f}
+Alert Level: {compliance_status.get('alert_level')}
+Section 43B(h) Violation: {compliance_status.get('section_43b_h_violation', False)}
+
+Create a 2-3 sentence professional summary suitable for management review."""
+
+        result = await self._ai_client.generate_text(
+            prompt=prompt,
+            max_tokens=150,
+            temperature=0.6
+        )
+        
+        if result['status'] == 'success':
+            return {
+                "status": "success",
+                "summary": result['text'],
+                "model": result.get('model'),
+                "agent": self.name
+            }
+        else:
+            return {
+                "status": "error",
+                "error": result.get('error'),
+                "agent": self.name
+            }
+

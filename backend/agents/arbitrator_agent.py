@@ -17,6 +17,34 @@ class ArbitratorAgent(BaseAgent):
         
         # Store configuration as private attribute to avoid Pydantic validation
         object.__setattr__(self, '_high_value_threshold', high_value_threshold)
+        
+        # Initialize AI client for strategic decisions
+        try:
+            import os
+            from utils import AIModelClient
+            from config_loader import CONFIG
+            
+            api_key = os.getenv('HUGGINGFACE_API_KEY')
+            ai_config = CONFIG.get('ai_models', {}).get('huggingface', {})
+            model_name = ai_config.get('models', {}).get('arbitrator_llm', 'mistralai/Mistral-7B-Instruct-v0.3')
+            
+            if api_key and api_key != 'your_huggingface_api_key_here':
+                object.__setattr__(self, '_ai_client', AIModelClient(
+                    api_key=api_key,
+                    model_name=model_name,
+                    timeout=ai_config.get('timeout', 30),
+                    max_retries=ai_config.get('max_retries', 3)
+                ))
+                object.__setattr__(self, '_ai_enabled', True)
+                print(f"✅ ArbitratorAgent AI enabled with {model_name}")
+            else:
+                object.__setattr__(self, '_ai_client', None)
+                object.__setattr__(self, '_ai_enabled', False)
+                print("⚠️ ArbitratorAgent AI disabled (no API key)")
+        except Exception as e:
+            print(f"⚠️ Failed to initialize AI for ArbitratorAgent: {e}")
+            object.__setattr__(self, '_ai_client', None)
+            object.__setattr__(self, '_ai_enabled', False)
     
     async def run(self, task: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -31,6 +59,14 @@ class ArbitratorAgent(BaseAgent):
         """
         if task == "evaluate_strategy":
             return self.evaluate_recovery_strategy(
+                transaction=context['transaction'],
+                customer=context['customer'],
+                compliance_status=context['compliance_status'],
+                communication_history=context.get('communication_history', [])
+            )
+        elif task == "evaluate_ai_strategy":
+            # NEW: AI-powered strategy evaluation
+            return await self.evaluate_ai_strategy(
                 transaction=context['transaction'],
                 customer=context['customer'],
                 compliance_status=context['compliance_status'],
@@ -270,3 +306,93 @@ class ArbitratorAgent(BaseAgent):
             return "medium"
         else:
             return "low"
+    
+    # ========================================================================
+    # AI-Powered Methods
+    # ========================================================================
+    
+    async def evaluate_ai_strategy(
+        self,
+        transaction: Dict[str, Any],
+        customer: Dict[str, Any],
+        compliance_status: Dict[str, Any],
+        communication_history: List[Dict[str, Any]] = []
+    ) -> Dict[str, Any]:
+        """
+        AI-powered strategic evaluation for recovery vs relationship balance.
+        Falls back to rule-based evaluation if AI unavailable.
+        """
+        if not self._ai_enabled or not self._ai_client:
+            # Fallback to rule-based strategy
+            return self.evaluate_recovery_strategy(
+                transaction, customer, compliance_status, communication_history
+            )
+        
+        # Calculate scores for context
+        scores = self.calculate_customer_scores(customer, transaction)
+        relationship_score = scores['relationship_score']
+        transaction_risk = scores['transaction_risk_score']
+        
+        # Construct prompt
+        prompt = f"""As a business relationship arbitrator, analyze this MSME payment recovery scenario:
+
+Customer Profile:
+- Name: {customer.get('name', 'Unknown')}
+- Total Business Value: ₹{customer.get('total_value', 0):,.0f}
+- Transaction Count: {customer.get('total_transactions', 0)}
+- Average Payment Delay: {customer.get('avg_payment_delay_days', 0)} days
+- Relationship Score: {relationship_score}/100
+- Customer Tier: {scores.get('customer_value_tier')}
+
+Current Situation:
+- Invoice Amount: ₹{transaction.get('amount', 0):,.0f}
+- Days Overdue: {compliance_status.get('days_overdue', 0)}
+- Interest Accrued: ₹{compliance_status.get('interest_amount', 0):,.0f}
+- Legal Flag: {compliance_status.get('legal_flag', False)}
+- Transaction Risk Score: {transaction_risk}/100
+
+Communication History:
+- Previous Messages: {len(communication_history)}
+
+Provide strategic recommendation:
+1. Strategy (grant_grace_period/diplomatic_escalation/aggressive_recovery/standard_process)
+2. Detailed reasoning (2-3 sentences)
+3. Specific action steps
+4. Risk assessment for chosen strategy
+5. Relationship preservation tactics"""
+
+        system_prompt = "You are an expert business arbitrator specializing in MSME payment recovery. Balance aggressive recovery with long-term relationship preservation. Consider Indian business culture and MSMED Act compliance."
+        
+        # Call AI
+        result = await self._ai_client.generate_text(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            max_tokens=500,
+            temperature=0.6
+        )
+        
+        if result['status'] == 'success':
+            # Determine HITL requirement based on scores
+            requires_hitl = self._requires_hitl_approval(
+                "ai_recommendation",
+                transaction.get('amount', 0),
+                relationship_score
+            )
+            
+            return {
+                "status": "success",
+                "ai_recommendation": result['text'],
+                "relationship_score": relationship_score,
+                "transaction_risk_score": transaction_risk,
+                "requires_hitl_approval": requires_hitl,
+                "customer_tier": scores.get('customer_value_tier'),
+                "risk_level": scores.get('risk_level'),
+                "model": result.get('model'),
+                "agent": self.name
+            }
+        else:
+            # Fallback to rule-based on AI failure
+            print(f"⚠️ AI strategy evaluation failed: {result.get('error')}. Using rule-based logic.")
+            return self.evaluate_recovery_strategy(
+                transaction, customer, compliance_status, communication_history
+            )

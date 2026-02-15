@@ -13,6 +13,8 @@ from memory.relational_db import DatabaseManager, Transaction, Customer, Communi
 from memory.vector_store import VectorMemory
 from config_loader import CONFIG
 
+from utils import parse_date
+
 class Orchestrator:
     """
     Google ADK-powered orchestrator for multi-agent coordination.
@@ -21,10 +23,8 @@ class Orchestrator:
     
     def __init__(self):
         """Initialize ADK orchestrator with all agents."""
-        # Initialize ADK agents with provider configuration
+        # Initialize Janitor with HuggingFace Vision OCR only
         self.janitor = JanitorAgent(
-            provider=CONFIG['llm']['provider'],
-            gemini_config=CONFIG['llm'].get('gemini'),
             huggingface_config=CONFIG['llm'].get('huggingface')
         )
         
@@ -58,19 +58,8 @@ class Orchestrator:
         )
         
     def _parse_date(self, date_str: Optional[str]) -> datetime:
-        """Parse date string with multiple fallback formats."""
-        if not date_str or date_str == 'null' or date_str == 'NULL':
-            return None
-            
-        for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%Y/%m/%d'):
-            try:
-                return datetime.strptime(date_str, fmt)
-            except (ValueError, TypeError):
-                continue
-                
-        # If all parsing fails, return None
-        print(f"⚠️  Date parsing failed for: {date_str}, using default")
-        return None
+        """Deprecated: Use utils.parse_date instead."""
+        return parse_date(date_str)
     
     async def process_invoice(
         self,
@@ -194,44 +183,97 @@ class Orchestrator:
                     }
                 )
                 
+                # Step 4.5: AI Risk Analysis (if enabled)
+                ai_risk_analysis = None
+                try:
+                    ai_risk_analysis = await self.compliance.run(
+                        task="analyze_risk",
+                        context={
+                            "transaction": {
+                                'vendor_name': data['vendor_name'],
+                                'amount': data['amount'],
+                                'days_overdue': compliance_result.get('days_overdue', 0),
+                                'interest_amount': compliance_result.get('interest_amount', 0),
+                                'legal_flag': compliance_result.get('legal_flag', False)
+                            },
+                            "customer_history": {
+                                'avg_payment_delay_days': customer.avg_payment_delay_days,
+                                'total_transactions': customer.total_transactions
+                            }
+                        }
+                    )
+                except Exception as e:
+                    print(f"AI risk analysis failed: {e}")
+                
                 # Step 5: Run Strategy/Arbitrator Evaluation
                 strategy_result = await self.arbitrator.run(
-                    task="evaluate_strategy",
+                    task="evaluate_ai_strategy",  # Use AI-enhanced method
                     context={
                         "transaction": {
+                            "id": transaction_id,
+                            "vendor_name": data['vendor_name'],
                             "amount": data['amount'],
                             "days_overdue": compliance_result.get('days_overdue', 0),
-                            "legal_flag": False
+                            "legal_flag": compliance_result.get('legal_flag', False)
                         },
                         "customer": {
+                            "name": customer.name,
                             "total_value": customer.total_value,
                             "avg_payment_delay_days": customer.avg_payment_delay_days,
                             "total_transactions": customer.total_transactions
                         },
-                        "compliance_status": compliance_result
+                        "compliance_status": compliance_result,
+                        "communication_history": []
                     }
                 )
 
                 # Step 6: Generate Message if needed
                 message_result = None
-                if strategy_result.get('recommendation') != 'standard_process':
-                    message_template = "friendly_reminder" # Default
-                    if strategy_result['recommendation'] == 'diplomatic_escalation':
-                        message_template = "formal_notice"
-                    elif strategy_result['recommendation'] == 'aggressive_recovery':
-                        message_template = "legal_notice"
-                        
-                    message_result = {
-                        "message_text": f"Generated {message_template} for {data['vendor_name']}",
-                        "requires_hitl_approval": strategy_result.get('requires_hitl_approval', False)
-                    }
+                if strategy_result.get('recommendation') or strategy_result.get('ai_recommendation'):
+                    # Determine message tier
+                    recommendation = strategy_result.get('recommendation', 'standard_process')
+                    message_tier = "friendly_reminder"  # Default
+                    
+                    if recommendation == 'diplomatic_escalation':
+                        message_tier = "formal_notice"
+                    elif recommendation == 'aggressive_recovery':
+                        message_tier = "legal_notice"
+                    
+                    # Try AI message generation first
+                    try:
+                        message_result = await self.collector.run(
+                            task="generate_ai_message",
+                            context={
+                                'tier': message_tier,
+                                'transaction': {
+                                    'id': transaction_id,
+                                    'vendor_name': data['vendor_name'],
+                                    'amount': data['amount'],
+                                    'invoice_number': data.get('invoice_number', 'N/A')
+                                },
+                                'compliance_status': compliance_result,
+                                'customer': {
+                                    'name': customer.name,
+                                    'phone_number': customer.phone_number,
+                                    'relationship_score': 50  # Default
+                                }
+                            }
+                        )
+                    except Exception as e:
+                        print(f"AI message generation failed: {e}")
+                        # Fallback to simple message
+                        message_result = {
+                            "message_text": f"Generated {message_tier} for {data['vendor_name']}",
+                            "requires_hitl_approval": strategy_result.get('requires_hitl_approval', False),
+                            "tier": message_tier
+                        }
                     
                     # Create communication record
                     comm = Communication(
                         transaction_id=transaction_id,
-                        message_type=message_template,
-                        message_text=message_result['message_text'],
-                        delivery_status='pending_approval'
+                        message_type=message_result.get('tier', message_tier),
+                        message_text=message_result.get('message_text', ''),
+                        delivery_status='pending_approval' if message_result.get('requires_hitl_approval') else 'approved'
                     )
                     db_session.add(comm)
                     db_session.commit()
@@ -262,7 +304,10 @@ class Orchestrator:
                     "status": "success",
                     "transaction_id": transaction_id,
                     "ingestion": {"extraction": data},
-                    "compliance": {"compliance": compliance_result},
+                    "compliance": {
+                        "compliance": compliance_result,
+                        "ai_risk_analysis": ai_risk_analysis  # NEW: AI insights
+                    },
                     "strategy": strategy_result,
                     "message": message_result,
                     "gstin_validation": gstin_validation,

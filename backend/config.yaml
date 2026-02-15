@@ -1,0 +1,45 @@
+llm:
+  provider: "huggingface" # Options: "gemini" or "huggingface"
+
+  # Gemini configuration
+  gemini:
+    model: "gemini-1.5-flash-latest"
+    api_key: "${GEMINI_API_KEY}"
+    temperature: 0.3
+    max_tokens: 2048
+
+  # HuggingFace configuration
+  huggingface:
+    model: "Qwen/Qwen2.5-VL-7B-Instruct"
+    api_key: "${HUGGINGFACE_API_KEY}"
+    use_local: false # true = local GPU inference, false = API
+    temperature: 0.3
+    max_tokens: 2048
+
+vector_db:
+  type: "chromadb"
+  path: "${CHROMA_DB_PATH}"
+  collection_name: "biz_agent_memory"
+
+relational_db:
+  type: "sqlite"
+  path: "${DATABASE_PATH}"
+
+whatsapp:
+  mock_mode: true
+  test_number: "${WHATSAPP_TEST_NUMBER}"
+
+gstin:
+  mock_mode: true
+
+compliance:
+  msmed_act:
+    payment_limit_days: 45
+    interest_multiplier: 3
+    bank_rate_percent: 6.5
+  section_43b_h: true
+
+safety:
+  require_hitl_for: ["legal_notice", "high_value"]
+  high_value_threshold: 50000
+  fraud_detection_enabled: true

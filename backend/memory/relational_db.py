@@ -13,13 +13,15 @@ class Transaction(Base):
     
     id = Column(Integer, primary_key=True)
     vendor_name = Column(String(200), nullable=False)
-    gstin = Column(String(15), index=True)
+    tax_id = Column(String(50), index=True) # Generalized from gstin
     amount = Column(Float, nullable=False)
+    currency = Column(String(10), default='USD') # Added currency
     invoice_number = Column(String(100), unique=True)
     invoice_date = Column(DateTime, nullable=False)
     due_date = Column(DateTime, nullable=False)
     status = Column(String(50), default='pending')  # pending, paid, overdue, escalated
     payment_date = Column(DateTime, nullable=True)
+    country_code = Column(String(2), default='US') # E.g., 'US', 'UK', 'IN' for compliance routing
     
     # Legal flags
     legal_flag = Column(Boolean, default=False)
@@ -27,7 +29,7 @@ class Transaction(Base):
     interest_amount = Column(Float, default=0.0)
     
     # Source tracking
-    source_type = Column(String(20))  # image, voice, manual
+    source_type = Column(String(50))  # image, voice, manual, db_poll
     raw_data_path = Column(String(500))
     
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -44,8 +46,9 @@ class Customer(Base):
     
     id = Column(Integer, primary_key=True)
     name = Column(String(200), nullable=False)
-    gstin = Column(String(15), unique=True, index=True)
-    phone_number = Column(String(15))
+    tax_id = Column(String(50), unique=True, index=True) # Generalized from gstin
+    country_code = Column(String(2), default='US')
+    phone_number = Column(String(25))
     email = Column(String(100))
     
     # Relationship scoring

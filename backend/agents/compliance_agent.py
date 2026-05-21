@@ -31,8 +31,8 @@ class ComplianceAgent(BaseAgent):
         # Initialize AI client for risk analysis
         try:
             import os
-            from utils import AIModelClient
-            from config_loader import CONFIG
+            from backend.utils import AIModelClient
+            from backend.config_loader import CONFIG
             
             api_key = os.getenv('HUGGINGFACE_API_KEY')
             ai_config = CONFIG.get('ai_models', {}).get('huggingface', {})
@@ -72,7 +72,8 @@ class ComplianceAgent(BaseAgent):
                 invoice_date=context['invoice_date'],
                 due_date=context['due_date'],
                 amount=context['amount'],
-                payment_date=context.get('payment_date')
+                payment_date=context.get('payment_date'),
+                country_code=context.get('country_code', 'US')
             )
         elif task == "generate_alert":
             return self.generate_compliance_alert(
@@ -103,9 +104,10 @@ class ComplianceAgent(BaseAgent):
         invoice_date: str,
         due_date: str,
         amount: float,
-        payment_date: Optional[str] = None
+        payment_date: Optional[str] = None,
+        country_code: str = 'US'
     ) -> Dict[str, Any]:
-        """Check compliance status of a transaction."""
+        """Check compliance status of a transaction based on generalized country rules."""
         def parse_date(date_str):
             if not date_str: return None
             for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%Y/%m/%d'):
@@ -130,33 +132,40 @@ class ComplianceAgent(BaseAgent):
             days_overdue = max(0, (today - due_dt).days)
             status = "overdue" if days_overdue > 0 else "pending"
         
-        # Calculate interest (MSMED Act Section 16)
+        # RAG / generalized logic variables
         interest_amount = 0.0
+        legal_flag = False
+        interest_rate = 0.0
+        
+        # Fallback simplistic mock generalized rules for numeric calculation
+        if country_code == 'IN':
+            limit_days = 45
+            interest_rate = 19.5 # 3 * 6.5
+        elif country_code == 'UK':
+            limit_days = 60
+            interest_rate = 8.0
+        else: # US / Default
+            limit_days = 30
+            interest_rate = 18.0
+
         if days_overdue > 0:
-            annual_interest_rate = self._interest_multiplier * self._bank_rate_percent
-            interest_amount = amount * (annual_interest_rate / 100) * (days_overdue / 365)
+            interest_amount = amount * (interest_rate / 100) * (days_overdue / 365)
         
-        # Check Section 43B(h) compliance
-        section_43b_h_violation = False
-        tax_disallowance_risk = False
-        
-        if self._section_43b_h_enabled and days_overdue > self._payment_limit_days:
-            section_43b_h_violation = True
-            tax_disallowance_risk = True
+        if days_overdue > limit_days:
+            legal_flag = True
         
         # Determine alert level
-        alert_level = self._get_alert_level(days_overdue, due_dt, today)
+        alert_level = self._get_alert_level(days_overdue, due_dt, today, limit_days)
         
         return {
             "status": status,
             "days_overdue": days_overdue,
             "interest_amount": round(interest_amount, 2),
-            "interest_rate_annual": self._interest_multiplier * self._bank_rate_percent,
-            "section_43b_h_violation": section_43b_h_violation,
-            "tax_disallowance_risk": tax_disallowance_risk,
+            "interest_rate_annual": interest_rate,
             "alert_level": alert_level,
             "days_until_due": (due_dt - today).days if payment_dt is None else 0,
-            "legal_flag": days_overdue > self._payment_limit_days,
+            "legal_flag": legal_flag,
+            "country_code": country_code,
             "agent": self.name
         }
     
@@ -171,23 +180,25 @@ class ComplianceAgent(BaseAgent):
         if alert_level == "none":
             return None
         
+        currency = transaction.get('currency', 'USD')
+
         alerts = {
             "warning": {
                 "severity": "low",
                 "title": "Payment Due Soon",
-                "message": f"Payment of ₹{transaction['amount']:,.2f} to {transaction['vendor_name']} is due in {compliance_status['days_until_due']} days.",
+                "message": f"Payment of {currency} {transaction['amount']:,.2f} to {transaction['vendor_name']} is due in {compliance_status['days_until_due']} days.",
                 "action": "Send friendly reminder"
             },
             "critical": {
                 "severity": "medium",
-                "title": "Payment Overdue - MSMED Act Violation",
-                "message": f"Payment of ₹{transaction['amount']:,.2f} is {compliance_status['days_overdue']} days overdue. Interest accrued: ₹{compliance_status['interest_amount']:,.2f}",
+                "title": "Payment Overdue - Compliance Violation",
+                "message": f"Payment of {currency} {transaction['amount']:,.2f} is {compliance_status['days_overdue']} days overdue. Interest accrued: {currency} {compliance_status['interest_amount']:,.2f}",
                 "action": "Send formal notice"
             },
             "severe": {
                 "severity": "high",
-                "title": "Section 43B(h) Tax Disallowance Risk",
-                "message": f"Payment overdue by {compliance_status['days_overdue']} days. Buyer risks tax deduction disallowance. Interest: ₹{compliance_status['interest_amount']:,.2f}",
+                "title": "Severe Legal / Tax Risk",
+                "message": f"Payment overdue by {compliance_status['days_overdue']} days. Legal/Tax risks apply. Interest: {currency} {compliance_status['interest_amount']:,.2f}",
                 "action": "Send legal notice (requires HITL approval)"
             }
         }
@@ -200,16 +211,16 @@ class ComplianceAgent(BaseAgent):
             
         return alert
     
-    def _get_alert_level(self, days_overdue: int, due_date: datetime, today: datetime) -> str:
+    def _get_alert_level(self, days_overdue: int, due_date: datetime, today: datetime, limit_days: int) -> str:
         """Determine alert severity level."""
         days_until_due = (due_date - today).days
         
         if days_until_due > 0 and days_until_due <= 7:
             return "warning"
         
-        if days_overdue > 0 and days_overdue <= self._payment_limit_days:
+        if days_overdue > 0 and days_overdue <= limit_days:
             return "critical"
-        elif days_overdue > self._payment_limit_days:
+        elif days_overdue > limit_days:
             return "severe"
         
         return "none"

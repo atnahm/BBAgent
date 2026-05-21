@@ -118,7 +118,8 @@ class ComplianceMonitor:
                     'invoice_date': txn.invoice_date.strftime('%Y-%m-%d') if txn.invoice_date else None,
                     'due_date': txn.due_date.strftime('%Y-%m-%d') if txn.due_date else None,
                     'amount': txn.amount,
-                    'payment_date': txn.payment_date.strftime('%Y-%m-%d') if txn.payment_date else None
+                    'payment_date': txn.payment_date.strftime('%Y-%m-%d') if txn.payment_date else None,
+                    'country_code': txn.country_code
                 }
 
                 if not context['invoice_date']:
@@ -197,6 +198,8 @@ class ComplianceMonitor:
         except Exception as e:
             print(f"     ❌ Message generation error: {str(e)}")
 
+from backend.ingestion.db_connector import GenericDBConnector
+
 class AutomatedSystem:
     """Main automation controller."""
     
@@ -212,6 +215,17 @@ class AutomatedSystem:
         self.watch_dir = Path("temp")
         self.watch_dir.mkdir(exist_ok=True)
         
+        # Setup generic DB poller (mock external DB query for setup)
+        # In a real scenario, this connection string and query would come from config
+        self.db_poller = GenericDBConnector(
+            orchestrator=self.orchestrator,
+            connection_string="sqlite:///:memory:", # Placeholder
+            query="SELECT 'Vendor' as vendor_name, '12345' as tax_id, 100 as amount, 'USD' as currency, 'INV-001' as invoice_number, '2023-01-01' as invoice_date, '2023-01-31' as due_date, 'US' as country_code WHERE 1=0"
+        )
+
+        from backend.communications.dispatcher import NotificationDispatcher
+        self.notification_dispatcher = NotificationDispatcher()
+
     async def run_compliance_loop(self):
         """Run compliance checks periodically."""
         while True:
@@ -239,16 +253,19 @@ class AutomatedSystem:
                     # Auto-approve friendly reminders for low-value transactions
                     # Configurable Limit
                     if comm.message_type == 'friendly_reminder' and txn.amount < self.auto_approve_limit:
-                        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ✅ Auto-approving friendly reminder (₹{txn.amount:,.2f})")
+                        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ✅ Auto-approving friendly reminder ({txn.currency} {txn.amount:,.2f})")
+
+                        # Send message via Dispatcher instead of hardcoded WhatsApp
+                        target_channel = "email" if txn.customer and txn.customer.email else "whatsapp"
+                        recipient = txn.customer.email if target_channel == "email" else (txn.customer.phone_number if txn.customer else "unknown")
                         
-                        # Send message
-                        send_result = await self.orchestrator.collector.send_whatsapp_message(
-                            txn.customer.phone_number if txn.customer else None,
-                            comm.message_text,
-                            comm.id
+                        send_result = await self.notification_dispatcher.dispatch(
+                            channel_name=target_channel,
+                            recipient=recipient,
+                            message=comm.message_text
                         )
                         
-                        comm.delivery_status = send_result.get('delivery_status', 'sent')
+                        comm.delivery_status = 'sent' if send_result.get('status') == 'success' else 'failed'
                         comm.approved_by = 'AutoSystem'
                         comm.approved_at = datetime.utcnow()
                         comm.sent_at = datetime.utcnow()
@@ -284,10 +301,11 @@ class AutomatedSystem:
         print("="*60 + "\n")
         
         try:
-            # Run both compliance monitoring and auto-approval concurrently
+            # Run compliance monitoring, auto-approval, and DB polling concurrently
             loop.run_until_complete(asyncio.gather(
                 self.run_compliance_loop(),
-                self.auto_approve_messages()
+                self.auto_approve_messages(),
+                self.db_poller.poll_external_db()
             ))
         except KeyboardInterrupt:
             print("\n\n🛑 Shutting down automated system...")

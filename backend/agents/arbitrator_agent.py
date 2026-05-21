@@ -21,8 +21,8 @@ class ArbitratorAgent(BaseAgent):
         # Initialize AI client for strategic decisions
         try:
             import os
-            from utils import AIModelClient
-            from config_loader import CONFIG
+            from backend.utils import AIModelClient
+            from backend.config_loader import CONFIG
             
             api_key = os.getenv('HUGGINGFACE_API_KEY')
             ai_config = CONFIG.get('ai_models', {}).get('huggingface', {})

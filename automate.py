@@ -226,6 +226,16 @@ class AutomatedSystem:
         from backend.communications.dispatcher import NotificationDispatcher
         self.notification_dispatcher = NotificationDispatcher()
 
+        # Setup IMAP Email Listener (mock credentials)
+        from backend.ingestion.email_listener import EmailListener
+        self.email_listener = EmailListener(
+            orchestrator=self.orchestrator,
+            imap_server="imap.example.com",
+            email_user="user@example.com",
+            email_pass="password",
+            watch_dir=str(self.watch_dir)
+        )
+
     async def run_compliance_loop(self):
         """Run compliance checks periodically."""
         while True:
@@ -301,11 +311,12 @@ class AutomatedSystem:
         print("="*60 + "\n")
         
         try:
-            # Run compliance monitoring, auto-approval, and DB polling concurrently
+            # Run compliance monitoring, auto-approval, DB polling, and email listener concurrently
             loop.run_until_complete(asyncio.gather(
                 self.run_compliance_loop(),
                 self.auto_approve_messages(),
-                self.db_poller.poll_external_db()
+                self.db_poller.poll_external_db(),
+                self.email_listener.poll_emails()
             ))
         except KeyboardInterrupt:
             print("\n\n🛑 Shutting down automated system...")

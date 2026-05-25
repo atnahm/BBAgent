@@ -215,26 +215,31 @@ class AutomatedSystem:
         self.watch_dir = Path("temp")
         self.watch_dir.mkdir(exist_ok=True)
         
-        # Setup generic DB poller (mock external DB query for setup)
-        # In a real scenario, this connection string and query would come from config
-        self.db_poller = GenericDBConnector(
-            orchestrator=self.orchestrator,
-            connection_string="sqlite:///:memory:", # Placeholder
-            query="SELECT 'Vendor' as vendor_name, '12345' as tax_id, 100 as amount, 'USD' as currency, 'INV-001' as invoice_number, '2023-01-01' as invoice_date, '2023-01-31' as due_date, 'US' as country_code WHERE 1=0"
-        )
+        # Setup generic DB poller from config
+        db_config = CONFIG.get("ingestion", {}).get("database", {})
+        self.db_poller = None
+        if db_config.get("enabled"):
+            self.db_poller = GenericDBConnector(
+                orchestrator=self.orchestrator,
+                connection_string=db_config.get("connection_string", "sqlite:///:memory:"),
+                query=db_config.get("query", "SELECT 1 WHERE 1=0")
+            )
 
         from backend.communications.dispatcher import NotificationDispatcher
         self.notification_dispatcher = NotificationDispatcher()
 
-        # Setup IMAP Email Listener (mock credentials)
-        from backend.ingestion.email_listener import EmailListener
-        self.email_listener = EmailListener(
-            orchestrator=self.orchestrator,
-            imap_server="imap.example.com",
-            email_user="user@example.com",
-            email_pass="password",
-            watch_dir=str(self.watch_dir)
-        )
+        # Setup IMAP Email Listener from config
+        email_config = CONFIG.get("ingestion", {}).get("email", {})
+        self.email_listener = None
+        if email_config.get("enabled"):
+            from backend.ingestion.email_listener import EmailListener
+            self.email_listener = EmailListener(
+                orchestrator=self.orchestrator,
+                imap_server=email_config.get("imap_server", ""),
+                email_user=email_config.get("username", ""),
+                email_pass=email_config.get("password", ""),
+                watch_dir=str(self.watch_dir)
+            )
 
     async def run_compliance_loop(self):
         """Run compliance checks periodically."""
@@ -268,7 +273,7 @@ class AutomatedSystem:
                         # Send message via Dispatcher instead of hardcoded WhatsApp
                         target_channel = "email" if txn.customer and txn.customer.email else "whatsapp"
                         recipient = txn.customer.email if target_channel == "email" else (txn.customer.phone_number if txn.customer else "unknown")
-                        
+
                         send_result = await self.notification_dispatcher.dispatch(
                             channel_name=target_channel,
                             recipient=recipient,
@@ -311,13 +316,18 @@ class AutomatedSystem:
         print("="*60 + "\n")
         
         try:
-            # Run compliance monitoring, auto-approval, DB polling, and email listener concurrently
-            loop.run_until_complete(asyncio.gather(
+            # Gather tasks dynamically based on what is configured
+            tasks = [
                 self.run_compliance_loop(),
-                self.auto_approve_messages(),
-                self.db_poller.poll_external_db(),
-                self.email_listener.poll_emails()
-            ))
+                self.auto_approve_messages()
+            ]
+            if self.db_poller:
+                tasks.append(self.db_poller.poll_external_db())
+            if self.email_listener:
+                tasks.append(self.email_listener.poll_emails())
+
+            # Run compliance monitoring, auto-approval, DB polling, and email listener concurrently
+            loop.run_until_complete(asyncio.gather(*tasks))
         except KeyboardInterrupt:
             print("\n\n🛑 Shutting down automated system...")
             self.observer.stop()

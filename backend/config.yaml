@@ -54,6 +54,17 @@ api:
 automation:
   auto_approve_limit: ${AUTO_APPROVE_LIMIT}
 
+ingestion:
+  email:
+    enabled: false
+    imap_server: "${IMAP_SERVER}"
+    username: "${IMAP_USERNAME}"
+    password: "${IMAP_PASSWORD}"
+  database:
+    enabled: false
+    connection_string: "${EXTERNAL_DB_CONNECTION}"
+    query: "${EXTERNAL_DB_QUERY}"
+
 # AI Models for Agent Enhancement
 ai_models:
   huggingface:

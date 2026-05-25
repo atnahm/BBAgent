@@ -31,7 +31,8 @@ with st.form("setup_form"):
     whatsapp_api = st.text_input("WhatsApp API Key", value=config_data.get("whatsapp", {}).get("api_key", ""), type="password")
 
     st.subheader("3. RAG / Web Scraper Rules")
-    mock_url = st.text_input("Enter Compliance URL to Scrape", placeholder="https://example.com/law")
+    scrape_country = st.text_input("Country Code (e.g. US, UK, IN)", placeholder="US", max_chars=2)
+    scrape_url = st.text_input("Enter Compliance URL to Scrape", placeholder="https://example.com/law")
 
     submit = st.form_submit_button("Save & Apply")
 
@@ -41,6 +42,30 @@ with st.form("setup_form"):
         config_data.setdefault("whatsapp", {})["api_key"] = whatsapp_api
         save_config(config_data)
 
-        if mock_url:
-            st.info(f"Triggering background scrape for {mock_url} (Check CLI logs)")
-            # Normally we'd call `WebScraper.ingest_compliance_url` here.
+        if scrape_url and scrape_country:
+            with st.spinner(f"Scraping {scrape_url}..."):
+                import sys
+                import asyncio
+                from pathlib import Path
+                backend_path = Path(__file__).parent.parent.parent / 'backend'
+                if str(backend_path) not in sys.path:
+                    sys.path.insert(0, str(backend_path))
+
+                from backend.compliance.web_scraper import WebScraper
+                from backend.memory.vector_store import VectorMemory
+                from backend.config_loader import CONFIG
+
+                # Resolve actual chroma path
+                db_path_resolved = config_data.get("vector_db", {}).get("path", "")
+                if "${CHROMA_DB_PATH}" in db_path_resolved:
+                    import os
+                    db_path_resolved = os.environ.get("CHROMA_DB_PATH", "./data/chroma")
+
+                vm = VectorMemory(db_path=db_path_resolved)
+                scraper = WebScraper(vm)
+
+                try:
+                    asyncio.run(scraper.ingest_compliance_url(scrape_country.upper(), scrape_url))
+                    st.success(f"Successfully scraped and ingested rules for {scrape_country.upper()}!")
+                except Exception as e:
+                    st.error(f"Failed to scrape URL: {e}")

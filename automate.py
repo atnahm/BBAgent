@@ -78,6 +78,16 @@ class InvoiceHandler(FileSystemEventHandler):
                 print(f"     Amount: ₹{val:,.2f}" if isinstance(val, (int, float)) else f"     Amount: {val}")
                 print(f"     Strategy: {result['strategy']['recommendation']}")
                 
+                if result.get('strategy', {}).get('trigger_escalation'):
+                    print(f"  🚨 High Risk! Triggering escalation webhook.")
+                    # Send escalation webhook/notification via dispatcher
+                    if hasattr(self, 'notification_dispatcher') and self.notification_dispatcher:
+                        await self.notification_dispatcher.dispatch(
+                            channel_name="webhook",
+                            recipient="internal_risk_team",
+                            message=f"Escalation required for Transaction ID: {result['transaction_id']} (High Risk)"
+                        )
+
                 if result.get('message') and result['message'].get('requires_hitl_approval'):
                     print(f"  ⏳ Message queued for HITL approval")
                 else:

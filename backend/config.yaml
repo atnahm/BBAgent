@@ -51,6 +51,11 @@ safety:
 api:
   secret_key: "${API_SECRET_KEY}"
 
+ui:
+  auth_enabled: false
+  username: "${UI_USERNAME}"
+  password: "${UI_PASSWORD}"
+
 automation:
   auto_approve_limit: ${AUTO_APPROVE_LIMIT}
 

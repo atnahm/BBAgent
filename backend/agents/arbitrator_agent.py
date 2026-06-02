@@ -58,14 +58,29 @@ class ArbitratorAgent(BaseAgent):
             Strategic recommendations and approval decisions
         """
         if task == "evaluate_strategy":
-            return self.evaluate_recovery_strategy(
-                transaction=context['transaction'],
-                customer=context['customer'],
-                compliance_status=context['compliance_status'],
-                communication_history=context.get('communication_history', [])
-            )
+            if self._ai_enabled and self._ai_client:
+                # Dynamically use AI if configured
+                result = await self.evaluate_ai_strategy(
+                    transaction=context['transaction'],
+                    customer=context['customer'],
+                    compliance_status=context['compliance_status'],
+                    communication_history=context.get('communication_history', [])
+                )
+            else:
+                result = self.evaluate_recovery_strategy(
+                    transaction=context['transaction'],
+                    customer=context['customer'],
+                    compliance_status=context['compliance_status'],
+                    communication_history=context.get('communication_history', [])
+                )
+
+            # Advanced Integration: Auto-Escalation Check
+            if result.get("transaction_risk_score", 0) > 80:
+                result["trigger_escalation"] = True
+
+            return result
         elif task == "evaluate_ai_strategy":
-            # NEW: AI-powered strategy evaluation
+            # Direct AI call backward compatibility
             return await self.evaluate_ai_strategy(
                 transaction=context['transaction'],
                 customer=context['customer'],

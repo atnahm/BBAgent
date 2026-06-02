@@ -31,20 +31,14 @@ def require_api_key(f):
             api_key = request.headers.get('X-API-KEY')
             configured_key = CONFIG.get('api', {}).get('secret_key')
             
-            # If no key configured in env, warn but allow (or block, strict by default)
-            if not configured_key or configured_key == 'change_this_to_a_secure_random_string':
-                print("⚠️  WARNING: API_SECRET_KEY not set or using default. Security disabled.")
-                # For Audit Fix: We enforced auth, so we block if key is missing/invalid
-                if not api_key:
-                     return jsonify({'error': 'Missing API Key'}), 401
+            # If no key configured or using template placeholder, allow bypass (open source friendly)
+            if not configured_key or configured_key == '${API_SECRET_KEY}' or configured_key == 'change_this_to_a_secure_random_string':
+                print("⚠️  WARNING: API_SECRET_KEY not set or using placeholder. API Security disabled for Open Source friendliness.")
+                return f(*args, **kwargs)
             
             if api_key and api_key == configured_key:
                  return f(*args, **kwargs)
                  
-            # Allow if key matches
-            if configured_key and api_key == configured_key:
-                return f(*args, **kwargs)
-                
             return jsonify({'error': 'Invalid or Missing API Key'}), 401
         except Exception as e:
             print(f"❌ Auth Error: {e}")

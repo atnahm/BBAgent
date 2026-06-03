@@ -10,9 +10,24 @@ class GenericDBConnector:
 
     def __init__(self, orchestrator, connection_string: str, query: str):
         self.orchestrator = orchestrator
-        self.engine = create_engine(connection_string)
+        # Avoid passing pool_size/max_overflow to SQLite which uses SingletonThreadPool
+        if connection_string.startswith("sqlite"):
+            self.engine = create_engine(connection_string)
+        else:
+            self.engine = create_engine(connection_string, pool_size=5, max_overflow=10)
         self.query = query
         self.poll_interval = 3600  # Poll every hour by default
+
+    @staticmethod
+    def test_connection(connection_string: str) -> bool:
+        """Test a connection string (used by Setup Wizard UI)."""
+        try:
+            engine = create_engine(connection_string, pool_pre_ping=True)
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return True
+        except Exception as e:
+            raise ValueError(str(e))
 
     async def poll_external_db(self):
         """Continuously polls the external database for new invoices."""

@@ -16,6 +16,14 @@ llm:
     temperature: 0.3
     max_tokens: 2048
 
+  # Local Offline Inference (e.g., Ollama or vLLM)
+  local:
+    endpoint_url: "${LOCAL_LLM_ENDPOINT}" # e.g., http://localhost:11434/api/generate
+    model: "llama3"
+    api_key: "none"
+    temperature: 0.3
+    max_tokens: 2048
+
 vector_db:
   type: "chromadb"
   path: "${CHROMA_DB_PATH}"

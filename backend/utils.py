@@ -90,27 +90,36 @@ def get_state_from_gstin(gstin: str) -> str:
 
 class AIModelClient:
     """
-    Shared HuggingFace LLM client for all agents.
-    Provides text generation with retry logic and fallback handling.
+    Shared Pluggable LLM client for all agents.
+    Supports HuggingFace and Local (Ollama/vLLM) text generation.
     """
     
-    def __init__(self, api_key: str, model_name: str, timeout: int = 30, max_retries: int = 3):
+    def __init__(self, api_key: str, model_name: str, timeout: int = 30, max_retries: int = 3, endpoint_url: Optional[str] = None):
         """
-        Initialize HuggingFace client.
+        Initialize LLM client.
         
         Args:
-            api_key: HuggingFace API token
-            model_name: Model identifier (e.g., "meta-llama/Llama-3.2-3B-Instruct")
+            api_key: API token
+            model_name: Model identifier
             timeout: Request timeout in seconds
             max_retries: Maximum retry attempts
+            endpoint_url: Base URL for local/custom endpoints
         """
+        self.model = model_name
+        self.max_retries = max_retries
+        self.enabled = True
+        self.endpoint_url = endpoint_url
+        self.is_local = bool(endpoint_url)
+
         try:
-            from huggingface_hub import InferenceClient
-            self.client = InferenceClient(token=api_key, timeout=timeout)
-            self.model = model_name
-            self.max_retries = max_retries
-            self.enabled = True
-            logger.info(f"✅ AIModelClient initialized with model: {model_name}")
+            if self.is_local:
+                # We use simple requests for local LLM (e.g., Ollama)
+                self.client = "local"
+                logger.info(f"✅ AIModelClient initialized for LOCAL endpoint: {endpoint_url}")
+            else:
+                from huggingface_hub import InferenceClient
+                self.client = InferenceClient(token=api_key, timeout=timeout)
+                logger.info(f"✅ AIModelClient initialized with HF model: {model_name}")
         except ImportError:
             logger.error("❌ huggingface_hub not installed. AI features disabled.")
             self.client = None
@@ -128,7 +137,7 @@ class AIModelClient:
         system_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Generate text using HuggingFace LLM with retry logic.
+        Generate text using Configured LLM with retry logic.
         
         Args:
             prompt: User prompt
@@ -154,7 +163,7 @@ class AIModelClient:
         # Retry logic
         for attempt in range(self.max_retries):
             try:
-                logger.info(f"🤖 Calling HuggingFace API (attempt {attempt + 1}/{self.max_retries})...")
+                logger.info(f"🤖 Calling AI API (attempt {attempt + 1}/{self.max_retries})...")
                 
                 # Use chat_completion for conversational models
                 messages = []
@@ -218,17 +227,33 @@ class AIModelClient:
         
         for attempt in range(self.max_retries):
             try:
-                response = self.client.text_generation(
-                    full_prompt,
-                    model=self.model,
-                    max_new_tokens=max_tokens,
-                    temperature=temperature,
-                    return_full_text=False
-                )
+                if self.is_local:
+                    import requests
+                    payload = {
+                        "model": self.model,
+                        "prompt": full_prompt,
+                        "stream": False,
+                        "options": {
+                            "temperature": temperature,
+                            "num_predict": max_tokens
+                        }
+                    }
+                    res = requests.post(self.endpoint_url, json=payload, timeout=30)
+                    res.raise_for_status()
+                    text_response = res.json().get("response", "")
+                else:
+                    response = self.client.text_generation(
+                        full_prompt,
+                        model=self.model,
+                        max_new_tokens=max_tokens,
+                        temperature=temperature,
+                        return_full_text=False
+                    )
+                    text_response = response.strip()
                 
                 return {
                     "status": "success",
-                    "text": response.strip(),
+                    "text": text_response,
                     "model": self.model
                 }
                 

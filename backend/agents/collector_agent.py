@@ -3,7 +3,7 @@ from google.adk.agents import BaseAgent
 from typing import Dict, Any, List, Optional
 import google.generativeai as genai
 from datetime import datetime
-from config_loader import CONFIG
+from backend.config_loader import CONFIG
 
 class CollectorAgent(BaseAgent):
     """
@@ -36,7 +36,7 @@ class CollectorAgent(BaseAgent):
         
         # Initialize AI client for message generation
         try:
-            from utils import AIModelClient
+            from backend.utils import AIModelClient
             
             hf_api_key = os.getenv('HUGGINGFACE_API_KEY')
             ai_config = CONFIG.get('ai_models', {}).get('huggingface', {})

@@ -1,14 +1,14 @@
 version: '3.8'
 
 services:
-  # Main automation service
-  automation:
+  # 1. Background Automation Worker
+  worker:
     build: .
-    container_name: bharat-biz-agent
+    container_name: bbagent-worker
     restart: unless-stopped
     volumes:
-      - ./data:/app/data
-      - ./temp:/app/temp
+      - data:/app/data
+      - temp:/app/temp
       - ./backend/.env:/app/backend/.env
     environment:
       - PYTHONUNBUFFERED=1
@@ -16,30 +16,16 @@ services:
     networks:
       - biz-agent-network
 
-  # Scheduler service
-  scheduler:
+  # 2. Flask API
+  api:
     build: .
-    container_name: bharat-biz-scheduler
-    restart: unless-stopped
-    volumes:
-      - ./data:/app/data
-      - ./backend/.env:/app/backend/.env
-    environment:
-      - PYTHONUNBUFFERED=1
-    command: python scheduler.py
-    networks:
-      - biz-agent-network
-
-  # Webhook API service
-  webhook:
-    build: .
-    container_name: bharat-biz-webhook
+    container_name: bbagent-api
     restart: unless-stopped
     ports:
       - "5000:5000"
     volumes:
-      - ./data:/app/data
-      - ./temp:/app/temp
+      - data:/app/data
+      - temp:/app/temp
       - ./backend/.env:/app/backend/.env
     environment:
       - PYTHONUNBUFFERED=1
@@ -47,34 +33,32 @@ services:
     networks:
       - biz-agent-network
 
-  # Streamlit dashboard
-  dashboard:
+  # 3. Streamlit UI
+  ui:
     build: .
-    container_name: bharat-biz-dashboard
+    container_name: bbagent-ui
     restart: unless-stopped
     ports:
       - "8501:8501"
     volumes:
-      - ./data:/app/data
-      - ./temp:/app/temp
+      - data:/app/data
+      - temp:/app/temp
       - ./backend/.env:/app/backend/.env
     environment:
       - PYTHONUNBUFFERED=1
-    command: streamlit run streamlit_app.py --server.address=0.0.0.0
+    command: streamlit run frontend/app.py --server.address=0.0.0.0
     networks:
       - biz-agent-network
 
-  # Monitoring dashboard
-  monitoring:
-    build: .
-    container_name: bharat-biz-monitoring
+  # 4. Vector DB (ChromaDB)
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: bbagent-chroma
     restart: unless-stopped
+    ports:
+      - "8000:8000"
     volumes:
-      - ./data:/app/data
-      - ./backend/.env:/app/backend/.env
-    environment:
-      - PYTHONUNBUFFERED=1
-    command: python monitoring_dashboard.py --interval 30
+      - data:/chroma/chroma
     networks:
       - biz-agent-network
 

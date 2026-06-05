@@ -5,15 +5,15 @@ from typing import Dict, Any, List, Optional
 import asyncio
 from datetime import datetime
 
-from agents.janitor_agent import JanitorAgent
-from agents.compliance_agent import ComplianceAgent
-from agents.collector_agent import CollectorAgent
-from agents.arbitrator_agent import ArbitratorAgent
-from memory.relational_db import DatabaseManager, Transaction, Customer, Communication
-from memory.vector_store import VectorMemory
-from config_loader import CONFIG
+from backend.agents.janitor_agent import JanitorAgent
+from backend.agents.compliance_agent import ComplianceAgent
+from backend.agents.collector_agent import CollectorAgent
+from backend.agents.arbitrator_agent import ArbitratorAgent
+from backend.memory.relational_db import DatabaseManager, Transaction, Customer, Communication
+from backend.memory.vector_store import VectorMemory
+from backend.config_loader import CONFIG
 
-from utils import parse_date
+from backend.utils import parse_date
 
 class Orchestrator:
     """
@@ -108,24 +108,29 @@ class Orchestrator:
                 from datetime import datetime, timedelta
                 data['due_date'] = (datetime.utcnow() + timedelta(days=45)).strftime('%Y-%m-%d')
             
-            # Step 2: Validate GSTIN (sync operation)
-            gstin_validation = self.janitor.validate_gstin(
-                data.get('gstin'),
-                mock_mode=CONFIG['gstin']['mock_mode']
-            )
+            # Resolve tax_id universally (fallback to gstin if still parsed that way)
+            tax_id = data.get('tax_id') or data.get('gstin')
+
+            # Step 2: Validate GSTIN (sync operation, only if Indian context implied)
+            gstin_validation = None
+            if tax_id and len(tax_id) == 15 and tax_id[0].isdigit():
+                gstin_validation = self.janitor.validate_gstin(
+                    tax_id,
+                    mock_mode=CONFIG['gstin']['mock_mode']
+                )
             
             # Step 3: Save to database
             db_session = self.db.get_session()
             try:
                 # Find or create customer
                 customer = db_session.query(Customer).filter_by(
-                    gstin=data.get('gstin')
-                ).first()
+                    tax_id=tax_id
+                ).first() if tax_id else None
                 
                 if not customer:
                     customer = Customer(
                         name=data['vendor_name'],
-                        gstin=data.get('gstin'),
+                        tax_id=tax_id,
                         total_transactions=0,
                         total_value=0.0
                     )
@@ -141,7 +146,7 @@ class Orchestrator:
                     print(f"Transaction {data.get('invoice_number')} already exists. Updating...")
                     transaction = existing_transaction
                     transaction.vendor_name = data['vendor_name']
-                    transaction.gstin = data.get('gstin')
+                    transaction.tax_id = tax_id
                     transaction.amount = data['amount']
                     transaction.invoice_date = self._parse_date(data['invoice_date'])
                     transaction.due_date = self._parse_date(data['due_date'])
@@ -151,7 +156,7 @@ class Orchestrator:
                 else:
                     transaction = Transaction(
                         vendor_name=data['vendor_name'],
-                        gstin=data.get('gstin'),
+                        tax_id=tax_id,
                         amount=data['amount'],
                         invoice_number=data.get('invoice_number'),
                         invoice_date=self._parse_date(data['invoice_date']),

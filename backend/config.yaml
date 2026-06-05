@@ -16,6 +16,14 @@ llm:
     temperature: 0.3
     max_tokens: 2048
 
+  # Local Offline Inference (e.g., Ollama or vLLM)
+  local:
+    endpoint_url: "${LOCAL_LLM_ENDPOINT}" # e.g., http://localhost:11434/api/generate
+    model: "llama3"
+    api_key: "none"
+    temperature: 0.3
+    max_tokens: 2048
+
 vector_db:
   type: "chromadb"
   path: "${CHROMA_DB_PATH}"
@@ -51,8 +59,24 @@ safety:
 api:
   secret_key: "${API_SECRET_KEY}"
 
+ui:
+  auth_enabled: false
+  username: "${UI_USERNAME}"
+  password: "${UI_PASSWORD}"
+
 automation:
   auto_approve_limit: ${AUTO_APPROVE_LIMIT}
+
+ingestion:
+  email:
+    enabled: false
+    imap_server: "${IMAP_SERVER}"
+    username: "${IMAP_USERNAME}"
+    password: "${IMAP_PASSWORD}"
+  database:
+    enabled: false
+    connection_string: "${EXTERNAL_DB_CONNECTION}"
+    query: "${EXTERNAL_DB_QUERY}"
 
 # AI Models for Agent Enhancement
 ai_models:

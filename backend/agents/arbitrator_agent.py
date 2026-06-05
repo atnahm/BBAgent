@@ -21,26 +21,39 @@ class ArbitratorAgent(BaseAgent):
         # Initialize AI client for strategic decisions
         try:
             import os
-            from utils import AIModelClient
-            from config_loader import CONFIG
+            from backend.utils import AIModelClient
+            from backend.config_loader import CONFIG
             
-            api_key = os.getenv('HUGGINGFACE_API_KEY')
-            ai_config = CONFIG.get('ai_models', {}).get('huggingface', {})
-            model_name = ai_config.get('models', {}).get('arbitrator_llm', 'mistralai/Mistral-7B-Instruct-v0.3')
+            llm_config = CONFIG.get('llm', {})
+            provider = llm_config.get('provider', 'huggingface')
             
-            if api_key and api_key != 'your_huggingface_api_key_here':
+            if provider == "local":
+                local_config = llm_config.get("local", {})
                 object.__setattr__(self, '_ai_client', AIModelClient(
-                    api_key=api_key,
-                    model_name=model_name,
-                    timeout=ai_config.get('timeout', 30),
-                    max_retries=ai_config.get('max_retries', 3)
+                    api_key="none",
+                    model_name=local_config.get("model", "llama3"),
+                    endpoint_url=local_config.get("endpoint_url", "http://localhost:11434/api/generate")
                 ))
                 object.__setattr__(self, '_ai_enabled', True)
-                print(f"✅ ArbitratorAgent AI enabled with {model_name}")
+                print(f"✅ ArbitratorAgent AI enabled with LOCAL {local_config.get('model')}")
             else:
-                object.__setattr__(self, '_ai_client', None)
-                object.__setattr__(self, '_ai_enabled', False)
-                print("⚠️ ArbitratorAgent AI disabled (no API key)")
+                api_key = os.getenv('HUGGINGFACE_API_KEY')
+                ai_config = CONFIG.get('ai_models', {}).get('huggingface', {})
+                model_name = ai_config.get('models', {}).get('arbitrator_llm', 'mistralai/Mistral-7B-Instruct-v0.3')
+
+                if api_key and api_key != 'your_huggingface_api_key_here':
+                    object.__setattr__(self, '_ai_client', AIModelClient(
+                        api_key=api_key,
+                        model_name=model_name,
+                        timeout=ai_config.get('timeout', 30),
+                        max_retries=ai_config.get('max_retries', 3)
+                    ))
+                    object.__setattr__(self, '_ai_enabled', True)
+                    print(f"✅ ArbitratorAgent AI enabled with {model_name}")
+                else:
+                    object.__setattr__(self, '_ai_client', None)
+                    object.__setattr__(self, '_ai_enabled', False)
+                    print("⚠️ ArbitratorAgent AI disabled (no API key)")
         except Exception as e:
             print(f"⚠️ Failed to initialize AI for ArbitratorAgent: {e}")
             object.__setattr__(self, '_ai_client', None)
@@ -58,14 +71,29 @@ class ArbitratorAgent(BaseAgent):
             Strategic recommendations and approval decisions
         """
         if task == "evaluate_strategy":
-            return self.evaluate_recovery_strategy(
-                transaction=context['transaction'],
-                customer=context['customer'],
-                compliance_status=context['compliance_status'],
-                communication_history=context.get('communication_history', [])
-            )
+            if self._ai_enabled and self._ai_client:
+                # Dynamically use AI if configured
+                result = await self.evaluate_ai_strategy(
+                    transaction=context['transaction'],
+                    customer=context['customer'],
+                    compliance_status=context['compliance_status'],
+                    communication_history=context.get('communication_history', [])
+                )
+            else:
+                result = self.evaluate_recovery_strategy(
+                    transaction=context['transaction'],
+                    customer=context['customer'],
+                    compliance_status=context['compliance_status'],
+                    communication_history=context.get('communication_history', [])
+                )
+
+            # Advanced Integration: Auto-Escalation Check
+            if result.get("transaction_risk_score", 0) > 80:
+                result["trigger_escalation"] = True
+
+            return result
         elif task == "evaluate_ai_strategy":
-            # NEW: AI-powered strategy evaluation
+            # Direct AI call backward compatibility
             return await self.evaluate_ai_strategy(
                 transaction=context['transaction'],
                 customer=context['customer'],

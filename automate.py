@@ -78,6 +78,16 @@ class InvoiceHandler(FileSystemEventHandler):
                 print(f"     Amount: ₹{val:,.2f}" if isinstance(val, (int, float)) else f"     Amount: {val}")
                 print(f"     Strategy: {result['strategy']['recommendation']}")
                 
+                if result.get('strategy', {}).get('trigger_escalation'):
+                    print(f"  🚨 High Risk! Triggering escalation webhook.")
+                    # Send escalation webhook/notification via dispatcher
+                    if hasattr(self, 'notification_dispatcher') and self.notification_dispatcher:
+                        await self.notification_dispatcher.dispatch(
+                            channel_name="webhook",
+                            recipient="internal_risk_team",
+                            message=f"Escalation required for Transaction ID: {result['transaction_id']} (High Risk)"
+                        )
+
                 if result.get('message') and result['message'].get('requires_hitl_approval'):
                     print(f"  ⏳ Message queued for HITL approval")
                 else:
@@ -118,7 +128,8 @@ class ComplianceMonitor:
                     'invoice_date': txn.invoice_date.strftime('%Y-%m-%d') if txn.invoice_date else None,
                     'due_date': txn.due_date.strftime('%Y-%m-%d') if txn.due_date else None,
                     'amount': txn.amount,
-                    'payment_date': txn.payment_date.strftime('%Y-%m-%d') if txn.payment_date else None
+                    'payment_date': txn.payment_date.strftime('%Y-%m-%d') if txn.payment_date else None,
+                    'country_code': txn.country_code
                 }
 
                 if not context['invoice_date']:
@@ -197,6 +208,8 @@ class ComplianceMonitor:
         except Exception as e:
             print(f"     ❌ Message generation error: {str(e)}")
 
+from backend.ingestion.db_connector import GenericDBConnector
+
 class AutomatedSystem:
     """Main automation controller."""
     
@@ -212,6 +225,32 @@ class AutomatedSystem:
         self.watch_dir = Path("temp")
         self.watch_dir.mkdir(exist_ok=True)
         
+        # Setup generic DB poller from config
+        db_config = CONFIG.get("ingestion", {}).get("database", {})
+        self.db_poller = None
+        if db_config.get("enabled"):
+            self.db_poller = GenericDBConnector(
+                orchestrator=self.orchestrator,
+                connection_string=db_config.get("connection_string", "sqlite:///:memory:"),
+                query=db_config.get("query", "SELECT 1 WHERE 1=0")
+            )
+
+        from backend.communications.dispatcher import NotificationDispatcher
+        self.notification_dispatcher = NotificationDispatcher()
+
+        # Setup IMAP Email Listener from config
+        email_config = CONFIG.get("ingestion", {}).get("email", {})
+        self.email_listener = None
+        if email_config.get("enabled"):
+            from backend.ingestion.email_listener import EmailListener
+            self.email_listener = EmailListener(
+                orchestrator=self.orchestrator,
+                imap_server=email_config.get("imap_server", ""),
+                email_user=email_config.get("username", ""),
+                email_pass=email_config.get("password", ""),
+                watch_dir=str(self.watch_dir)
+            )
+
     async def run_compliance_loop(self):
         """Run compliance checks periodically."""
         while True:
@@ -239,16 +278,19 @@ class AutomatedSystem:
                     # Auto-approve friendly reminders for low-value transactions
                     # Configurable Limit
                     if comm.message_type == 'friendly_reminder' and txn.amount < self.auto_approve_limit:
-                        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ✅ Auto-approving friendly reminder (₹{txn.amount:,.2f})")
-                        
-                        # Send message
-                        send_result = await self.orchestrator.collector.send_whatsapp_message(
-                            txn.customer.phone_number if txn.customer else None,
-                            comm.message_text,
-                            comm.id
+                        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ✅ Auto-approving friendly reminder ({txn.currency} {txn.amount:,.2f})")
+
+                        # Send message via Dispatcher instead of hardcoded WhatsApp
+                        target_channel = "email" if txn.customer and txn.customer.email else "whatsapp"
+                        recipient = txn.customer.email if target_channel == "email" else (txn.customer.phone_number if txn.customer else "unknown")
+
+                        send_result = await self.notification_dispatcher.dispatch(
+                            channel_name=target_channel,
+                            recipient=recipient,
+                            message=comm.message_text
                         )
                         
-                        comm.delivery_status = send_result.get('delivery_status', 'sent')
+                        comm.delivery_status = 'sent' if send_result.get('status') == 'success' else 'failed'
                         comm.approved_by = 'AutoSystem'
                         comm.approved_at = datetime.utcnow()
                         comm.sent_at = datetime.utcnow()
@@ -284,11 +326,18 @@ class AutomatedSystem:
         print("="*60 + "\n")
         
         try:
-            # Run both compliance monitoring and auto-approval concurrently
-            loop.run_until_complete(asyncio.gather(
+            # Gather tasks dynamically based on what is configured
+            tasks = [
                 self.run_compliance_loop(),
                 self.auto_approve_messages()
-            ))
+            ]
+            if self.db_poller:
+                tasks.append(self.db_poller.poll_external_db())
+            if self.email_listener:
+                tasks.append(self.email_listener.poll_emails())
+
+            # Run compliance monitoring, auto-approval, DB polling, and email listener concurrently
+            loop.run_until_complete(asyncio.gather(*tasks))
         except KeyboardInterrupt:
             print("\n\n🛑 Shutting down automated system...")
             self.observer.stop()

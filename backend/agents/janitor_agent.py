@@ -60,8 +60,10 @@ class JanitorAgent(BaseAgent):
         elif task == "process_voice":
             return await self.process_voice_note(context.get('audio_path'))
         elif task == "validate_gstin":
+            # Backward compatibility for existing task names
+            tax_id = context.get('tax_id') or context.get('gstin')
             return self.validate_gstin(
-                context.get('gstin'),
+                tax_id,
                 context.get('mock_mode', True)
             )
         else:
@@ -312,7 +314,7 @@ IMPORTANT:
     
     def validate_gstin(self, gstin: Optional[str], mock_mode: bool = True) -> Dict[str, Any]:
         """Validate GSTIN format and optionally check with API."""
-        from utils import validate_gstin_checksum, get_state_from_gstin
+        from backend.utils import validate_gstin_checksum, get_state_from_gstin
         
         if not gstin:
             return {"valid": False, "reason": "GSTIN not provided"}
@@ -382,7 +384,7 @@ IMPORTANT:
     
     def _validate_extracted_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize and validate extracted data."""
-        from utils import parse_date
+        from backend.utils import parse_date
         
         if data.get('invoice_date'):
             invoice_date = parse_date(data['invoice_date'])
@@ -409,6 +411,6 @@ IMPORTANT:
 
     def _get_state_from_gstin(self, gstin: str) -> str:
         """Deprecated: Use utils.get_state_from_gstin instead."""
-        from utils import get_state_from_gstin
+        from backend.utils import get_state_from_gstin
         return get_state_from_gstin(gstin)
 

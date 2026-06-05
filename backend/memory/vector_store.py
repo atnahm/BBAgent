@@ -7,7 +7,7 @@ from datetime import datetime
 class VectorMemory:
     """Manages vector embeddings for semantic memory."""
     
-    def __init__(self, db_path: str = "./data/chroma", collection_name: str = "transactions"):
+    def __init__(self, db_path: str = "./data/chroma", collection_name: str = "invoices_unstructured"):
         """Initialize ChromaDB with persistent storage using new API."""
         # Create directory if it doesn't exist
         db_dir = Path(db_path)
@@ -18,8 +18,47 @@ class VectorMemory:
         
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
-            metadata={"description": "MSME transaction semantic memory"}
+            metadata={"description": "Invoice transaction semantic memory"}
         )
+
+        self.compliance_rules_collection = self.client.get_or_create_collection(
+            name="compliance_rules",
+            metadata={"description": "Country-specific compliance rules and laws"}
+        )
+
+    def add_compliance_rule(
+        self,
+        country_code: str,
+        rule_text: str,
+        metadata: Dict[str, Any]
+    ) -> None:
+        """Store compliance rules for semantic retrieval."""
+        self.compliance_rules_collection.add(
+            documents=[rule_text],
+            metadatas=[{
+                **metadata,
+                "country_code": country_code,
+                "timestamp": datetime.utcnow().isoformat()
+            }],
+            ids=[f"rule_{country_code}_{datetime.utcnow().timestamp()}"]
+        )
+
+    def search_compliance_rules(
+        self,
+        query: str,
+        country_code: Optional[str] = None,
+        n_results: int = 3
+    ) -> List[Dict[str, Any]]:
+        """Search for relevant compliance rules."""
+        where_filter = {"country_code": country_code} if country_code else None
+
+        results = self.compliance_rules_collection.query(
+            query_texts=[query],
+            n_results=n_results,
+            where=where_filter
+        )
+
+        return self._format_results(results)
     
     def add_transaction_context(
         self,

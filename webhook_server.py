@@ -20,7 +20,30 @@ sys.path.insert(0, str(backend_path))
 from core.orchestrator import Orchestrator
 from config_loader import CONFIG
 
+from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
 app = Flask(__name__)
+
+# Security Hardening: Enable CORS and Rate Limiting
+CORS(app)
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://"
+)
+
+@app.after_request
+def set_security_headers(response):
+    """Add Enterprise HTTP Security Headers."""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    return response
+
 orchestrator = Orchestrator()
 
 # --- Security Decorator ---
@@ -31,20 +54,14 @@ def require_api_key(f):
             api_key = request.headers.get('X-API-KEY')
             configured_key = CONFIG.get('api', {}).get('secret_key')
             
-            # If no key configured in env, warn but allow (or block, strict by default)
-            if not configured_key or configured_key == 'change_this_to_a_secure_random_string':
-                print("⚠️  WARNING: API_SECRET_KEY not set or using default. Security disabled.")
-                # For Audit Fix: We enforced auth, so we block if key is missing/invalid
-                if not api_key:
-                     return jsonify({'error': 'Missing API Key'}), 401
+            # If no key configured or using template placeholder, allow bypass (open source friendly)
+            if not configured_key or configured_key == '${API_SECRET_KEY}' or configured_key == 'change_this_to_a_secure_random_string':
+                print("⚠️  WARNING: API_SECRET_KEY not set or using placeholder. API Security disabled for Open Source friendliness.")
+                return f(*args, **kwargs)
             
             if api_key and api_key == configured_key:
                  return f(*args, **kwargs)
                  
-            # Allow if key matches
-            if configured_key and api_key == configured_key:
-                return f(*args, **kwargs)
-                
             return jsonify({'error': 'Invalid or Missing API Key'}), 401
         except Exception as e:
             print(f"❌ Auth Error: {e}")
@@ -64,11 +81,16 @@ def health_check():
 
 @app.route('/api/v1/invoice/upload', methods=['POST'])
 @require_api_key
+@limiter.limit("10 per minute") # Specific rate limit for uploads
 async def upload_invoice():
     """
     Upload invoice for processing (Async).
     """
     try:
+        # Prevent oversized payloads before parsing
+        if request.content_length and request.content_length > 10 * 1024 * 1024:  # 10MB limit
+            return jsonify({'error': 'Payload too large. Max 10MB allowed.'}), 413
+
         data = request.get_json()
         
         if not data or 'file_data' not in data:
@@ -83,6 +105,12 @@ async def upload_invoice():
         file_type = data.get('file_type', 'image')
         filename = data.get('filename', 'invoice.jpg')
         
+        # Security: Validate file extension
+        valid_extensions = {'.pdf', '.jpg', '.jpeg', '.png'}
+        file_ext = Path(filename).suffix.lower()
+        if file_ext not in valid_extensions:
+            return jsonify({'error': f'Invalid file type. Allowed: {", ".join(valid_extensions)}'}), 400
+
         # Save to temp file
         suffix = Path(filename).suffix
         if not suffix:

@@ -24,7 +24,7 @@ RUN mkdir -p /app/data /app/temp
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app/backend
+ENV PYTHONPATH=/app
 
 # Default command (can be overridden in docker-compose)
 CMD ["python", "automate.py"]
